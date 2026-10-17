@@ -123,6 +123,8 @@ export interface FaultRule {
  */
 export class FaultProxy {
   readonly seen: RecordedRequest[] = [];
+  /** TCP connections the client opened to the proxy. */
+  connections = 0;
   readonly #rules: FaultRule[] = [];
   readonly #server = createServer((req, res) => this.#handle(req, res));
   readonly #target: ServerInfo;
@@ -134,6 +136,7 @@ export class FaultProxy {
   static async start(target: ServerInfo = shared): Promise<FaultProxy> {
     if (target.scheme !== "http") throw new Error("the fault proxy speaks plain HTTP to the server");
     const proxy = new FaultProxy(target);
+    proxy.#server.on("connection", () => proxy.connections++);
     await new Promise<void>((resolve) => proxy.#server.listen(0, "127.0.0.1", resolve));
     onTestFinished(() => proxy.close());
     return proxy;

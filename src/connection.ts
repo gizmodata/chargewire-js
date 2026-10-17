@@ -428,6 +428,12 @@ export class Connection {
     }
     await this.#before();
     core.require(Capability.ingest, "bulk ingest");
+    // Partitioned ingest (spec §8.3, still on warp-sql's feature/ingest-partitions branch)
+    // slots in here once it lands on main, as the Go and JDBC drivers do it: on a server
+    // listing `partitioned_ingest`, an upload of two batches or more opens an ingest
+    // (POST …/ingests), sends its batches as up to `parts` part uploads at once (each with
+    // its own Idempotency-Key), and commits with the part count; any failed part aborts
+    // the ingest (DELETE), so nothing is written. Otherwise, the single upload below.
     const body = await arrowBody(data, { streaming: core.platform.streamingUploads });
     const query = {
       table: tableName,

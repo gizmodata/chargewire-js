@@ -161,7 +161,7 @@ export class PartReader implements BatchSource {
   }
 
   async #release(): Promise<void> {
-    this.#body?.cancel();
+    this.#body?.finish();
     this.#body = undefined;
     const reader = this.#reader;
     this.#reader = undefined;

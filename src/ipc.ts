@@ -168,6 +168,24 @@ export class ScannedBody implements AsyncIterable<Uint8Array> {
     this.#reader.cancel().catch(() => {});
   }
 
+  /**
+   * Ends reading. After the end-of-stream marker the rest of the body (normally nothing) is
+   * read out, so the HTTP connection goes back to the pool; before it, the download stops.
+   */
+  finish(): void {
+    if (this.#cancelled) return;
+    if (!this.scanner.sawEos) {
+      this.cancel();
+      return;
+    }
+    this.#cancelled = true;
+    const drain = async (): Promise<void> => {
+      for (let n = 0; n < 1024; n++) if ((await this.#reader.read()).done) return;
+      await this.#reader.cancel();
+    };
+    drain().catch(() => {});
+  }
+
   async *[Symbol.asyncIterator](): AsyncGenerator<Uint8Array> {
     try {
       for (;;) {
@@ -178,7 +196,7 @@ export class ScannedBody implements AsyncIterable<Uint8Array> {
         if (this.scanner.sawEos) break;
       }
     } finally {
-      this.cancel(); // stop the download (and free the connection) whenever reading stops
+      this.finish(); // whenever reading stops
     }
     if (!this.scanner.sawEos) throw incompleteStream();
   }

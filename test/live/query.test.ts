@@ -5,7 +5,7 @@ import { describe, expect, test } from "vitest";
 
 import { ErrorCode, WarpSqlError, connect } from "../../src/index.js";
 import { serverName, testUsername } from "./harness.js";
-import { expectCode, numbers, open, quiet, reached, scalar, shared } from "./helpers.js";
+import { FaultProxy, expectCode, numbers, open, quiet, reached, scalar, shared } from "./helpers.js";
 
 describe("queries", () => {
   test("SELECT 1 on the named server", async () => {
@@ -174,6 +174,18 @@ describe("queries", () => {
     const stream = conn.stream("INSERT INTO q_cnt VALUES (1), (2)");
     expect(await stream.rowsAffected()).toBe(2);
     expect((await stream.toTable()).numRows).toBe(0);
+  });
+
+  test("connections are reused across statements", async () => {
+    const proxy = await FaultProxy.start();
+    const conn = await open({ resultPartitions: 1 }, proxy.info);
+    // 80 rounds: when finished bodies were cancelled instead of read out, a few connections
+    // were lost along the way (8 here); read out, the pool keeps the same few.
+    for (let i = 0; i < 80; i++) {
+      expect((await conn.query("SELECT * FROM range(1000)")).numRows).toBe(1000);
+      expect(await conn.execute("SELECT 1")).toBeNull();
+    }
+    expect(proxy.connections).toBeLessThanOrEqual(4);
   });
 
   test("a closed connection refuses work", async () => {

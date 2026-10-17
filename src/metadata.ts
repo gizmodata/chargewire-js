@@ -247,6 +247,7 @@ export async function readTable(resp: Response): Promise<Table> {
   await reader.open();
   const batches = [];
   for await (const batch of reader) batches.push(batch);
+  body.finish();
   if (!body.scanner.sawEos) throw incompleteStream();
   return new ArrowTable(reader.schema, batches);
 }

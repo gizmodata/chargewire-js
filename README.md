@@ -237,6 +237,8 @@ Statement options, per call or as `connect` defaults:
   result has been read (Hardcharger 0.2 does). Before the session does anything else, the client
   reads what open streams still hold into memory, up to `resultBufferBytes`; a bigger rest is
   dropped, and reading on raises `result_buffer_exceeded`.
+- **Partitioned uploads** (spec §8.3, one ingest over several connections) are designed for and
+  come once the section lands on warp-sql's main branch; until then `ingest` sends one stream.
 - **Capabilities.** Nothing the server's discovery document does not list is used: prepared
   statements, ingest, transactions, partitions and zstd fail with `not_implemented` or stay off.
 
@@ -294,7 +296,7 @@ which no test reached a server fails too.
 
 ```bash
 export WARP_SQL_JS_TEST_SERVER_BINARY=/path/to/warp-duckdb
-npm run test:live       # Node (vitest), 98 tests
+npm run test:live       # Node (vitest), 99 tests
 npm run test:smoke      # Node, Deno, Bun and workerd (needs a build)
 npm run test:browser    # Chromium and WebKit (Playwright; needs a build)
 ```
