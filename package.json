@@ -1,0 +1,100 @@
+{
+  "name": "@gizmodata/warp-sql",
+  "version": "0.1.0",
+  "description": "JavaScript/TypeScript client for the Warp SQL protocol: SQL over plain HTTP with Apache Arrow results, for Node, browsers, Deno, Bun and edge runtimes.",
+  "author": "GizmoData LLC",
+  "license": "Apache-2.0",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gizmodata/warp-sql-js.git"
+  },
+  "homepage": "https://github.com/gizmodata/warp-sql-js#readme",
+  "keywords": [
+    "warp-sql",
+    "hardcharger",
+    "gizmodata",
+    "arrow",
+    "apache-arrow",
+    "sql",
+    "http",
+    "fetch",
+    "duckdb"
+  ],
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "node": {
+        "import": {
+          "types": "./dist/node/index.d.mts",
+          "default": "./dist/node/index.mjs"
+        },
+        "require": {
+          "types": "./dist/node/index.d.cts",
+          "default": "./dist/node/index.cjs"
+        }
+      },
+      "default": {
+        "import": {
+          "types": "./dist/web/index.d.mts",
+          "default": "./dist/web/index.mjs"
+        },
+        "require": {
+          "types": "./dist/web/index.d.cts",
+          "default": "./dist/web/index.cjs"
+        }
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "./dist/node/index.cjs",
+  "module": "./dist/node/index.mjs",
+  "types": "./dist/node/index.d.cts",
+  "files": [
+    "dist/",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc -p tsconfig.json && tsc -p test/tsconfig.json",
+    "lint": "eslint . && prettier --check .",
+    "format": "prettier --write .",
+    "test": "vitest run --config vitest.unit.config.ts",
+    "test:live": "vitest run --config vitest.live.config.ts",
+    "test:browser": "playwright test --config test/browser/playwright.config.ts",
+    "test:smoke": "node test/smoke/run.mjs",
+    "check:package": "publint --strict && attw --pack . --profile node16",
+    "size": "node scripts/size.mjs",
+    "example:browser": "node examples/browser/serve.mjs",
+    "prepublishOnly": "node scripts/guard-publish.mjs"
+  },
+  "peerDependencies": {
+    "apache-arrow": "^21.2.0"
+  },
+  "dependencies": {
+    "fzstd": "^0.1.1",
+    "undici": "^8.12.2"
+  },
+  "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.5",
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.64.1",
+    "@types/node": "^26.6.5",
+    "apache-arrow": "^21.2.0",
+    "esbuild": "^0.28.2",
+    "eslint": "^10.13.0",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.13.0",
+    "prettier": "^3.9.10",
+    "publint": "^0.3.25",
+    "tsdown": "^0.23.1",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.71.2",
+    "vitest": "^5.0.5"
+  }
+}

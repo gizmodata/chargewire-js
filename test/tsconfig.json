@@ -1,0 +1,9 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "noUncheckedIndexedAccess": true,
+    "paths": { "#platform": ["../src/platform/node.ts"] }
+  },
+  "include": ["../src", "./**/*.ts", "../*.config.ts"]
+}
