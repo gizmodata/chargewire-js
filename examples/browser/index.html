@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Warp SQL in the browser</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --accent: #f15a24;
+        --accent-2: #31a8db;
+        font-family: system-ui, sans-serif;
+      }
+      body {
+        margin: 0 auto;
+        max-width: 960px;
+        padding: 16px;
+      }
+      h1 span {
+        background: linear-gradient(90deg, var(--accent), var(--accent-2));
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+      }
+      form {
+        display: grid;
+        gap: 8px;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      }
+      textarea {
+        grid-column: 1 / -1;
+        font-family: ui-monospace, monospace;
+        min-height: 5em;
+      }
+      .buttons {
+        grid-column: 1 / -1;
+        display: flex;
+        gap: 8px;
+      }
+      button {
+        background: var(--accent);
+        border: 0;
+        border-radius: 6px;
+        color: white;
+        padding: 8px 16px;
+      }
+      button[type="button"] {
+        background: var(--accent-2);
+      }
+      #status {
+        font-family: ui-monospace, monospace;
+        margin: 12px 0;
+      }
+      #status.error {
+        color: #d33;
+      }
+      .scroll {
+        overflow-x: auto;
+      }
+      table {
+        border-collapse: collapse;
+        font-family: ui-monospace, monospace;
+        font-size: 13px;
+      }
+      th,
+      td {
+        border-bottom: 1px solid #8884;
+        padding: 4px 10px;
+        text-align: left;
+      }
+    </style>
+  </head>
+  <body>
+    <h1><span>Warp SQL</span> from a web page</h1>
+    <p>
+      Plain <code>fetch</code> and Apache Arrow: the page signs in with a password in a JSON body (never in a URL), runs
+      the query, and streams the result batch by batch. The server must allow this page's origin (CORS).
+    </p>
+    <form id="query">
+      <input id="url" aria-label="Server URL" placeholder="http://127.0.0.1:31337" required />
+      <input id="username" aria-label="User name" placeholder="user name" autocomplete="username" required />
+      <input
+        id="password"
+        aria-label="Password"
+        type="password"
+        placeholder="password"
+        autocomplete="current-password"
+        required
+      />
+      <textarea id="sql" aria-label="SQL">SELECT 42 AS answer, 'hello from Warp SQL' AS greeting</textarea>
+      <div class="buttons">
+        <button type="submit" id="run">Run</button>
+        <button type="button" id="cancel">Cancel</button>
+      </div>
+    </form>
+    <div id="status" role="status"></div>
+    <div class="scroll"><table id="result"></table></div>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

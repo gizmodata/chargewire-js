@@ -1,0 +1,196 @@
+name: warp-sql-js-ci
+
+# Lint, a real typecheck, unit tests on every supported Node, the package checks, and the
+# live suites against Hardcharger: Node (vitest), Deno, Bun, workerd (Cloudflare Workers),
+# and Chromium and WebKit (Playwright).
+#
+# The live suites need a Warp SQL server. They use the Hardcharger release image
+# (ghcr.io/gizmodata/hardcharger, private), pulled with this workflow's GITHUB_TOKEN. That
+# works only once the package grants this repository read access: on GitHub, the
+# hardcharger package's settings, "Manage Actions access", add gizmodata/warp-sql-js (Read).
+# Until then the `server` job fails, and so does every live job: they never skip.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+# A newer run on the same branch makes an older one pointless: cancel it. Never on a tag:
+# a release run must finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  # The Hardcharger release the live suites run against.
+  HARDCHARGER_IMAGE: ghcr.io/gizmodata/hardcharger:0.2.0
+
+jobs:
+  checks:
+    name: lint, typecheck, unit tests, package
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Lint (eslint, prettier)
+        run: npm run lint
+      - name: Typecheck (src, tests and configs)
+        run: npm run typecheck
+      - name: Unit tests
+        run: npm test
+      - name: Build
+        run: npm run build
+      - name: Package checks (publint, are-the-types-wrong)
+        run: npm run check:package
+      - name: Bundle size
+        run: npm run size
+
+  node:
+    name: unit tests (Node ${{ matrix.node }})
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24, 26]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Unit tests on the dependency floors
+        if: matrix.node == 22
+        run: |
+          npm install --no-save apache-arrow@21.2.0 fzstd@0.1.1 undici@8.12.2
+          npm ls apache-arrow fzstd undici
+          npm test
+
+  server:
+    name: Hardcharger binary
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull the image and take its server out
+        run: |
+          if ! docker pull "$HARDCHARGER_IMAGE"; then
+            echo "::error::Cannot pull $HARDCHARGER_IMAGE. Grant this repository read access in the hardcharger package's 'Manage Actions access' settings."
+            exit 1
+          fi
+          id=$(docker create "$HARDCHARGER_IMAGE")
+          docker cp "$id:/opt/hardcharger" hardcharger
+          docker rm "$id"
+          hardcharger/bin/hardcharger-server --version
+          tar -czf hardcharger.tar.gz hardcharger
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hardcharger-linux-amd64
+          path: hardcharger.tar.gz
+          retention-days: 3
+
+  live:
+    name: live tests (Node ${{ matrix.node }}, Hardcharger)
+    needs: server
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    runs-on: ubuntu-24.04
+    env:
+      WARP_SQL_JS_TEST_SERVER_PASSWORD_ENV: HARDCHARGER_ADMIN_PASSWORD
+      WARP_SQL_JS_TEST_SERVER_USERNAME_FLAG: --admin-username
+      WARP_SQL_JS_TEST_SERVER_MTLS_FLAG: --mtls-ca-cert
+      WARP_SQL_JS_TEST_SERVER_CORS_FLAG: --cors-origins
+      WARP_SQL_JS_TEST_SERVER_NAME: Hardcharger
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - uses: actions/download-artifact@v8
+        with:
+          name: hardcharger-linux-amd64
+      - name: Unpack the server
+        run: |
+          tar -C "$RUNNER_TEMP" -xzf hardcharger.tar.gz
+          echo "WARP_SQL_JS_TEST_SERVER_BINARY=$RUNNER_TEMP/hardcharger/bin/hardcharger-server" >> "$GITHUB_ENV"
+      - run: npm ci
+      - name: Live tests
+        run: npm run test:live
+
+  runtimes:
+    name: Deno, Bun and workerd (Hardcharger)
+    needs: server
+    runs-on: ubuntu-24.04
+    env:
+      WARP_SQL_JS_TEST_SERVER_PASSWORD_ENV: HARDCHARGER_ADMIN_PASSWORD
+      WARP_SQL_JS_TEST_SERVER_USERNAME_FLAG: --admin-username
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - uses: actions/download-artifact@v8
+        with:
+          name: hardcharger-linux-amd64
+      - name: Unpack the server
+        run: |
+          tar -C "$RUNNER_TEMP" -xzf hardcharger.tar.gz
+          echo "WARP_SQL_JS_TEST_SERVER_BINARY=$RUNNER_TEMP/hardcharger/bin/hardcharger-server" >> "$GITHUB_ENV"
+      - run: npm ci
+      - run: npm run build
+      - name: Node, Deno, Bun and workerd smoke tests
+        run: npm run test:smoke
+
+  browser:
+    name: browsers (Chromium, WebKit; Hardcharger)
+    needs: server
+    runs-on: ubuntu-24.04
+    env:
+      WARP_SQL_JS_TEST_SERVER_PASSWORD_ENV: HARDCHARGER_ADMIN_PASSWORD
+      WARP_SQL_JS_TEST_SERVER_USERNAME_FLAG: --admin-username
+      WARP_SQL_JS_TEST_SERVER_CORS_FLAG: --cors-origins
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/download-artifact@v8
+        with:
+          name: hardcharger-linux-amd64
+      - name: Unpack the server
+        run: |
+          tar -C "$RUNNER_TEMP" -xzf hardcharger.tar.gz
+          echo "WARP_SQL_JS_TEST_SERVER_BINARY=$RUNNER_TEMP/hardcharger/bin/hardcharger-server" >> "$GITHUB_ENV"
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium webkit
+      - run: npm run build
+      - name: Browser tests
+        run: npm run test:browser

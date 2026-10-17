@@ -90,6 +90,7 @@
     "eslint": "^10.13.0",
     "eslint-config-prettier": "^10.1.8",
     "globals": "^17.13.0",
+    "miniflare": "^4.20260730.0",
     "prettier": "^3.9.10",
     "publint": "^0.3.25",
     "tsdown": "^0.23.1",

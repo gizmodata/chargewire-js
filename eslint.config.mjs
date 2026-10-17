@@ -11,12 +11,7 @@ export default defineConfig(
   ...tseslint.configs.strictTypeChecked,
   {
     languageOptions: {
-      parserOptions: {
-        projectService: {
-          allowDefaultProject: ["*.mjs", "*.ts", "examples/*/*.mjs", "scripts/*.mjs", "test/smoke/*.mjs"],
-        },
-        tsconfigRootDir: import.meta.dirname,
-      },
+      parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname },
       globals: { ...globals.node, ...globals.browser },
     },
     rules: {
@@ -45,5 +40,8 @@ export default defineConfig(
       "@typescript-eslint/no-unnecessary-type-assertion": "off",
     },
   },
+  // Plain JavaScript (examples, scripts, smoke tests) and the build configs: no type information.
+  // The configs are type-checked by `npm run typecheck` (test/tsconfig.json).
+  { files: ["**/*.mjs", "*.config.ts"], ...tseslint.configs.disableTypeChecked },
   prettier,
 );

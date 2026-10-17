@@ -3,6 +3,7 @@
   "compilerOptions": {
     "types": ["node"],
     "noUncheckedIndexedAccess": true,
+    "allowImportingTsExtensions": true,
     "paths": { "#platform": ["../src/platform/node.ts"] }
   },
   "include": ["../src", "./**/*.ts", "../*.config.ts"]
