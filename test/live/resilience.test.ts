@@ -6,8 +6,8 @@
 import { tableFromArrays } from "apache-arrow";
 import { describe, expect, test } from "vitest";
 
-import { ErrorCode, WarpSqlError } from "../../src/index.js";
-import { killSession, launchServer, rawToken } from "./harness.js";
+import { ErrorCode } from "../../src/index.js";
+import { killSession, launchServer, rawToken, serverName } from "./harness.js";
 import {
   FaultProxy,
   bigQuery,
@@ -233,9 +233,32 @@ describe("lost sessions (§5.6)", () => {
     expect(numbers(await q.query([41]))).toEqual([42]);
   });
 
-  test("a session ended for another reason is an error, not replaced", async () => {
-    const conn = await open();
-    expect(WarpSqlError.is(new WarpSqlError({ code: "session_ended", reason: "killed" }), "session_ended")).toBe(true);
-    expect(conn.sessionReplacements).toBe(0);
-  });
+  // Only Hardcharger can end a session from SQL (KILL SESSION); warp-duckdb has no way to.
+  test.runIf(serverName() === "Hardcharger")(
+    "a killed session is session_ended (reason killed), also for GET: not renewed, not replaced, not not-found",
+    async () => {
+      const proxy = await FaultProxy.start();
+      const victim = await open({}, proxy.info);
+      const tokens = () => proxy.requests((r) => r.path.endsWith("/auth/token")).length;
+      const before = tokens();
+      const id = victim.sessionId;
+      // KILL SESSION takes Hardcharger's own id for the session, not the Warp SQL one.
+      const engineId = String(
+        (await victim.query("SELECT CAST(HARDCHARGER_CURRENT_SESSION() AS VARCHAR) AS s")).get(0)!.s,
+      );
+      await (await open()).execute(`KILL SESSION '${engineId}'`);
+      // GET /sessions/{id} (spec §5.2): a server answering 200 here reports a dead session alive.
+      const probe = await expectCode(victim.getSession(), ErrorCode.sessionEnded);
+      expect(probe.reason).toBe("killed");
+      expect(probe.status).toBe(401);
+      const run = await expectCode(victim.query("SELECT 1"), ErrorCode.sessionEnded);
+      expect(run.reason).toBe("killed");
+      expect(victim.sessionId).toBe(id);
+      expect(victim.sessionReplacements).toBe(0);
+      expect(tokens()).toBe(before); // a session_ended is no reason to sign in again
+      // The twin: a session nobody killed answers GET.
+      const alive = await open();
+      expect((await alive.getSession()).session_id).toBe(alive.sessionId);
+    },
+  );
 });

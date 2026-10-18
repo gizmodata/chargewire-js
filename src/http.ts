@@ -31,17 +31,35 @@ export function jsonBody(value: unknown): RequestBody {
   return { contentType: mediaTypeJSON, bytes: new TextEncoder().encode(stringifyJSON(value)) };
 }
 
-/** JSON.stringify, with bigints written as exact integers. */
+/**
+ * JSON.stringify, with numbers written so the server reads exactly the value given (§6.1):
+ * a bigint as its exact integer, whatever its size; a Number beyond the safe integers in
+ * exponent form, which reads back as the same double (JSON.stringify writes 2 ** 63 as
+ * 9223372036854776000, another integer, which a server binds exactly, as that integer).
+ */
 export function stringifyJSON(value: unknown): string {
   const marks: string[] = [];
+  // Placeholders are strings with a NUL and a random tag, so no string value can pass for one.
+  const tag = randomTag();
   const text = JSON.stringify(value, (_key, v: unknown) => {
-    if (typeof v === "bigint") {
-      marks.push(v.toString());
-      return `\u0000bigint${marks.length - 1}\u0000`;
+    let exact: string | undefined;
+    if (typeof v === "bigint") exact = v.toString();
+    else if (typeof v === "number" && Number.isFinite(v) && Math.abs(v) > Number.MAX_SAFE_INTEGER) {
+      exact = v.toExponential();
     }
-    return v;
+    if (exact === undefined) return v;
+    marks.push(exact);
+    return `\u0000${tag}:${marks.length - 1}\u0000`;
   });
-  return marks.length === 0 ? text : text.replace(/"\\u0000bigint(\d+)\\u0000"/g, (_m, i: string) => marks[Number(i)]!);
+  if (marks.length === 0) return text;
+  const placeholder = new RegExp(`"\\\\u0000${tag}:(\\d+)\\\\u0000"`, "g");
+  return text.replace(placeholder, (_m, i: string) => marks[Number(i)]!);
+}
+
+function randomTag(): string {
+  const bytes = new Uint8Array(12);
+  globalThis.crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 function replayable(body: RequestBody | undefined): boolean {

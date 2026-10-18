@@ -6,6 +6,28 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Fixed
+
+- A Number beyond `Number.MAX_SAFE_INTEGER` in JSON parameters (or any JSON body) is written in
+  exponent form, so the server reads exactly that double. `JSON.stringify` wrote `2 ** 63` as
+  `9223372036854776000`, another integer, which a server that binds wide integers exactly (spec
+  §6.1, warp-sql fc0c683) bound as that integer. Bigints were and are written as exact integers of
+  any size.
+- Arrow parameter rows (`executeBatch`, a prepared statement run with plain values) refuse an
+  integer that does not fit its parameter's type, a fraction for an integer type, and a Number
+  beyond the safe integers, instead of letting Arrow JS wrap or truncate it (`2n ** 63n` into a
+  BIGINT was written as `-2n ** 63n`, `300` into a UTINYINT as `44`, `1.5` into an INTEGER as `1`);
+  an untyped bigint beyond 64 bits is refused too. Numbers now bind to 64-bit integer parameters
+  (they were refused by Arrow JS) and bigints to narrower ones.
+- Tests: live tests that wide integer parameters come back exact or are refused (§6.1), that a
+  Number beyond the safe integers binds as its double, that `executeBatch` refuses an integer its
+  parameter can't hold, and (Hardcharger, which can `KILL SESSION`) that a killed session is
+  `session_ended` with reason `killed` for a statement and for `getSession()` (spec §5.2), with no
+  new token and no replacement. It replaces a test that asserted nothing about a server. CI's live
+  suites run against `hardcharger:main` (0.2.0 rounds wide integers and answers that GET with 200).
+- The bigint placeholders in JSON bodies carry a random tag: a string parameter that spelled the
+  old fixed placeholder (`"\u0000bigint0\u0000"`) was sent as a number.
+
 ### Added
 
 - Client certificate sign-in (spec §4.4): `connect({ authType: "client_certificate" })` sends the

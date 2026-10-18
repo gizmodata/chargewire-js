@@ -131,6 +131,39 @@ describe("queries", () => {
     expect(injected.get(0)!.s).toBe("1; DROP TABLE x");
   });
 
+  test("integer parameters beyond 64 bits keep their exact value (§6.1), or are refused", async () => {
+    const conn = await open();
+    const wide = [
+      2n ** 63n - 1n,
+      2n ** 64n - 1n,
+      2n ** 64n,
+      10n ** 38n - 1n,
+      2n ** 127n,
+      2n ** 128n - 1n,
+      -(2n ** 63n) - 1n,
+      -(2n ** 127n),
+    ];
+    for (const value of wide) {
+      try {
+        const table = await conn.query("SELECT CAST(? AS VARCHAR) AS t", [value]);
+        expect(table.get(0)!.t, String(value)).toBe(String(value)); // never a rounded double
+      } catch (err) {
+        expect(WarpSqlError.is(err, ErrorCode.badRequest), String(err)).toBe(true);
+      }
+    }
+  });
+
+  test("a Number beyond the safe integers binds as the double it is, not as other digits", async () => {
+    // JSON.stringify(2 ** 63) is 9223372036854776000: a server reading that exactly binds an
+    // integer 192 too large. The client writes such a Number in exponent form.
+    const conn = await open();
+    const exact = await conn.query(
+      "SELECT CAST(? AS HUGEINT) = 9223372036854775808::HUGEINT AS a, CAST(? AS HUGEINT) = 18446744073709551616::HUGEINT AS b, CAST(? AS DOUBLE) = 1e300 AS c",
+      [2 ** 63, 2 ** 64, 1e300],
+    );
+    expect(exact.get(0)!.toJSON()).toEqual({ a: true, b: true, c: true });
+  });
+
   test("parameters JSON cannot carry are refused before anything is sent", async () => {
     const conn = await open();
     const err = await expectCode(conn.query("SELECT ?", [new Date() as unknown as string]), ErrorCode.invalidArgument);

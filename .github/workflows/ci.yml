@@ -29,8 +29,9 @@ concurrency:
 
 env:
   # The Hardcharger the live suites run against: its main branch, which has certificate
-  # sign-in (--mtls-certificate-sign-in; 0.2.0 does not). Pin a :sha-<short> tag to
-  # reproduce an old run.
+  # sign-in (--mtls-certificate-sign-in), binds wide integer parameters exactly, and answers
+  # GET of a killed session with session_ended (0.2.0 does none of these). Pin a
+  # :sha-<short> tag to reproduce an old run.
   HARDCHARGER_IMAGE: ghcr.io/gizmodata/hardcharger:main
 
 jobs:

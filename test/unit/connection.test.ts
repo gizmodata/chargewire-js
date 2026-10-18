@@ -87,6 +87,17 @@ describe("sessions (§5.6)", () => {
     expect(conn.sessionReplacements).toBe(1);
   });
 
+  test("GET of a killed session is session_ended with its reason: no token renewal, no replacement", async () => {
+    const server = new FakeServer();
+    server.on("GET", /^\/warp\/v1\/sessions\/s1$/, () => problem(401, "session_ended", { reason: "killed" }));
+    const conn = await open(server);
+    const err = await expectCode(conn.getSession(), ErrorCode.sessionEnded);
+    expect(err.reason).toBe("killed");
+    expect(server.tokens).toBe(1);
+    expect(server.sessions).toBe(1);
+    expect(conn.sessionReplacements).toBe(0);
+  });
+
   test("session_ended for any other reason is an error with its reason, and nothing is replaced", async () => {
     const server = new FakeServer();
     server.on("POST", /\/statements$/, () => problem(401, "session_ended", { reason: "killed" }));

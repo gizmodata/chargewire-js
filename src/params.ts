@@ -2,7 +2,7 @@
 
 import {
   type Data,
-  type DataType,
+  DataType,
   Type,
   type Vector,
   Null,
@@ -16,6 +16,7 @@ import {
   vectorFromArray,
   Schema as ArrowSchema,
   Field,
+  Int64,
 } from "apache-arrow";
 
 import { invalidArgument } from "./errors.js";
@@ -93,9 +94,10 @@ export function parameterRows(schema: Schema | undefined, rows: readonly (readon
     const values: unknown[] = rows.map((row) => row[i]);
     const declared = schema?.fields[i]?.type as DataType | undefined;
     const type = declared === undefined || declared instanceof Null ? undefined : declared;
+    const exact = exactIntegers(values, type ?? inferredInt64(values), i + 1);
     let vector: Vector<DataType>;
     try {
-      vector = toVector(values, type);
+      vector = toVector(exact, type);
     } catch (err) {
       throw invalidArgument(
         `parameter ${i + 1} cannot be converted to ${type === undefined ? "an Arrow type" : Type[type.typeId]}: ${String(err)}`,
@@ -110,6 +112,42 @@ export function parameterRows(schema: Schema | undefined, rows: readonly (readon
     batchSchema,
     makeData({ type: new Struct(batchSchema.fields), length: rows.length, children }),
   );
+}
+
+/** The type Arrow JS gives values it is left to type: Int64 when they hold a bigint. */
+function inferredInt64(values: readonly unknown[]): DataType | undefined {
+  return values.some((v) => typeof v === "bigint") ? new Int64() : undefined;
+}
+
+/**
+ * The values for an integer type, each checked to fit it: Arrow JS would wrap one that
+ * doesn't (2n ** 63n into an Int64 as -2n ** 63n, 300 into a Uint8 as 44) and truncate a
+ * fraction. A Number beyond the safe integers is no longer the integer it was written as,
+ * so it is refused too. 64-bit types take bigints, the others Numbers.
+ */
+function exactIntegers(values: unknown[], type: DataType | undefined, position: number): unknown[] {
+  if (type === undefined || !DataType.isInt(type)) return values;
+  const bits = BigInt(type.bitWidth);
+  const min = type.isSigned ? -(1n << (bits - 1n)) : 0n;
+  const max = type.isSigned ? (1n << (bits - 1n)) - 1n : (1n << bits) - 1n;
+  return values.map((value) => {
+    let exact: bigint;
+    if (typeof value === "bigint") exact = value;
+    else if (typeof value === "number") {
+      if (!Number.isInteger(value))
+        throw invalidArgument(`parameter ${position} is ${value}, not an integer, for ${String(type)}`);
+      if (!Number.isSafeInteger(value)) {
+        throw invalidArgument(
+          `parameter ${position} is ${value}, beyond Number.MAX_SAFE_INTEGER, so not exact: pass it as a bigint`,
+        );
+      }
+      exact = BigInt(value);
+    } else return value; // null, or something vectorFromArray refuses
+    if (exact < min || exact > max) {
+      throw invalidArgument(`parameter ${position} is ${exact}, out of range for ${String(type)} (${min} to ${max})`);
+    }
+    return type.bitWidth === 64 ? exact : Number(exact);
+  });
 }
 
 /** vectorFromArray, typed: its overloads type a vector of unknown values as any. */

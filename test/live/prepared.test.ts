@@ -55,6 +55,19 @@ describe("prepared statements", () => {
     expect(Number(table.get(0)!.ms)).toBe(at.getTime());
   });
 
+  test("executeBatch refuses an integer its parameter's type can't hold, instead of wrapping it", async () => {
+    const conn = await open();
+    await conn.execute("CREATE OR REPLACE TABLE p_wrap (id BIGINT)");
+    const insert = await conn.prepare("INSERT INTO p_wrap VALUES (?)");
+    const err = await expectCode(insert.executeBatch([[1n], [2n ** 63n]]), ErrorCode.invalidArgument);
+    expect(err.message).toContain("out of range for Int64");
+    expect(await scalar(conn, "SELECT count(*) FROM p_wrap")).toBe(0); // nothing was sent
+    // The twin: the largest BIGINT, and a plain Number, go in exactly.
+    expect(await insert.executeBatch([[2n ** 63n - 1n], [-(2n ** 63n)], [42]])).toBe(3);
+    const ids = (await conn.query("SELECT id FROM p_wrap ORDER BY id")).getChild("id")!.toArray();
+    expect(ids).toEqual(BigInt64Array.from([-(2n ** 63n), 42n, 2n ** 63n - 1n]));
+  });
+
   test("several parameter rows of a query concatenate their results, in order", async () => {
     const conn = await open();
     const times = await conn.prepare("SELECT ?::INTEGER * 10 AS v FROM range(2)");
