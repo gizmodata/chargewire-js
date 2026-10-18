@@ -8,6 +8,7 @@ const port = Number(process.env["WARP_SQL_JS_EXAMPLE_PORT"] ?? 5173);
 export default defineConfig({
   testDir: ".",
   testMatch: "*.spec.ts",
+  testIgnore: "mtls.spec.ts", // its own config: playwright.mtls.config.ts
   globalSetup: "./global-setup.ts",
   timeout: 60_000,
   forbidOnly: true,

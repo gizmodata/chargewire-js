@@ -6,7 +6,7 @@ import type { AddressInfo } from "node:net";
 import { describe, expect, test } from "vitest";
 
 import { ErrorCode, connect, defaultSchemes } from "../../src/index.js";
-import { makeCA } from "./certs.js";
+import { makeCA } from "./tls-ca.js";
 import { type RunningServer, freePort, launchServer, rawToken, testUsername } from "./harness.js";
 import { expectCode, numbers, open, quiet, reached, scalar, shared, uri } from "./helpers.js";
 

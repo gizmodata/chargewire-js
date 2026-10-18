@@ -17,7 +17,8 @@ export type Credentials =
   | { kind: "password"; username: string; password: string }
   | { kind: "subject"; subjectToken: () => Promise<string> }
   | { kind: "provider"; provider: () => Promise<string> }
-  | { kind: "static"; token: string };
+  | { kind: "static"; token: string }
+  | { kind: "certificate" }; // the client_certificate grant (§4.4): the TLS client certificate
 
 /** A request body. One held in memory can be sent again; a stream is sent once. */
 export interface RequestBody {
@@ -75,6 +76,8 @@ export interface HttpClientConfig {
   maxAttempts: number;
   userAgent?: string | undefined;
   logger: Logger;
+  /** fetch's credentials mode (browsers: "include" sends the user's client certificate cross-origin). */
+  fetchCredentials?: RequestCredentials | undefined;
 }
 
 /** How long before its expiry a token is replaced, at most. */
@@ -91,6 +94,7 @@ export class HttpClient {
   readonly #credentials: Credentials;
   readonly #maxAttempts: number;
   readonly #userAgent: string | undefined;
+  readonly #fetchCredentials: RequestCredentials | undefined;
   #token: string | undefined;
   #renewAt: number | undefined; // when to replace the token; undefined when its lifetime is unknown
   #renewing: Promise<void> | undefined;
@@ -102,6 +106,7 @@ export class HttpClient {
     this.#credentials = config.credentials;
     this.#maxAttempts = Math.max(1, config.maxAttempts);
     this.#userAgent = config.userAgent;
+    this.#fetchCredentials = config.fetchCredentials;
     if (config.credentials.kind === "static") this.#token = config.credentials.token;
   }
 
@@ -172,6 +177,7 @@ export class HttpClient {
     if (token !== undefined) headers.set("Authorization", `Bearer ${token}`);
     if (this.#userAgent !== undefined) headers.set("User-Agent", this.#userAgent);
     const init: RequestInit & { duplex?: "half" } = { method: req.method, headers };
+    if (this.#fetchCredentials !== undefined) init.credentials = this.#fetchCredentials;
     if (req.body?.bytes !== undefined) init.body = req.body.bytes as BodyInit;
     if (req.body?.stream !== undefined) {
       init.body = req.body.stream;
@@ -244,7 +250,9 @@ export class HttpClient {
     const grant =
       credentials.kind === "password"
         ? { grant_type: "password", username: credentials.username, password: credentials.password }
-        : { grant_type: "token_exchange", subject_token: await credentials.subjectToken() };
+        : credentials.kind === "certificate"
+          ? { grant_type: "client_certificate" } // no fields: the connection's certificate is the credential
+          : { grant_type: "token_exchange", subject_token: await credentials.subjectToken() };
     const answer = await this.json<{ access_token?: unknown; token_type?: unknown; expires_in?: unknown }>({
       method: "POST",
       path: "/v1/auth/token",

@@ -67,6 +67,7 @@
     "test": "vitest run --config vitest.unit.config.ts",
     "test:live": "vitest run --config vitest.live.config.ts",
     "test:browser": "playwright test --config test/browser/playwright.config.ts",
+    "test:browser:mtls": "playwright test --config test/browser/playwright.mtls.config.ts",
     "test:smoke": "node test/smoke/run.mjs",
     "check:package": "publint --strict && attw --pack . --profile node16",
     "size": "node scripts/size.mjs",

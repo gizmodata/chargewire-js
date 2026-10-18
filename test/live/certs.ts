@@ -1,14 +1,24 @@
 // Licensed under the Apache License, Version 2.0.
 //
 // Throwaway certificates for the TLS tests, made with the openssl command: a CA, a server
-// certificate for 127.0.0.1 and localhost, and a client certificate for mutual TLS.
+// certificate for 127.0.0.1 and localhost, and a client certificate for mutual TLS whose
+// identity (an e-mail SAN, for certificate sign-in, §4.4) is clientEmail. issueClient makes
+// more client certificates from the same CA.
 
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { onTestFinished } from "vitest";
+// No vitest import: the browser tests' global setup (Playwright) makes certificates too.
+
+/** The identity (rfc822Name SAN) of makeCA's client certificate. */
+export const clientEmail = "warp-test-client@example.com";
+
+export interface ClientCertificate {
+  certPem: string;
+  keyPem: string;
+}
 
 export interface TestCA {
   caPem: string;
@@ -17,15 +27,21 @@ export interface TestCA {
   serverKey: string;
   clientCertPem: string;
   clientKeyPem: string;
+  /** Another client certificate from this CA, with this e-mail identity. */
+  issueClient(cn: string, email: string): ClientCertificate;
 }
 
 function openssl(dir: string, ...args: string[]): void {
   execFileSync("openssl", args, { cwd: dir, stdio: "pipe" });
 }
 
-export function makeCA(): TestCA {
+/** A CA in a fresh temporary directory, which `remove` deletes. */
+export function makeCAWithCleanup(): TestCA & { remove(): void } {
   const dir = mkdtempSync(join(tmpdir(), "warp-sql-js-tls-"));
-  onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+  return { ...makeCAIn(dir), remove: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+function makeCAIn(dir: string): TestCA {
   const days = ["-days", "2"];
   const ec = ["-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes"];
   openssl(
@@ -67,7 +83,8 @@ export function makeCA(): TestCA {
     );
   };
   issue("server", "localhost", "extendedKeyUsage=serverAuth\nsubjectAltName=IP:127.0.0.1,DNS:localhost");
-  issue("client", "warp_test", "extendedKeyUsage=clientAuth");
+  issue("client", "warp_test", `extendedKeyUsage=clientAuth\nsubjectAltName=email:${clientEmail}`);
+  let issued = 0;
   return {
     caPem: readFileSync(join(dir, "ca.pem"), "utf8"),
     caFile: join(dir, "ca.pem"),
@@ -75,5 +92,13 @@ export function makeCA(): TestCA {
     serverKey: join(dir, "server.key"),
     clientCertPem: readFileSync(join(dir, "client.pem"), "utf8"),
     clientKeyPem: readFileSync(join(dir, "client.key"), "utf8"),
+    issueClient(cn: string, email: string): ClientCertificate {
+      const name = `client${++issued}`;
+      issue(name, cn, `extendedKeyUsage=clientAuth\nsubjectAltName=email:${email}`);
+      return {
+        certPem: readFileSync(join(dir, `${name}.pem`), "utf8"),
+        keyPem: readFileSync(join(dir, `${name}.key`), "utf8"),
+      };
+    },
   };
 }

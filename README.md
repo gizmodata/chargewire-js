@@ -120,7 +120,7 @@ system's trust store (no `tls` options), uploads are sent whole (browsers stream
 only over HTTP/2, Safari not at all), and results are split into at most 4 partitions by default
 (browsers and Workers allow about six connections per host over HTTP/1.1, and a split result needs
 one per partition). Credentials are bearer tokens in a header, never cookies, so cross-origin
-access needs only the server's CORS allow-list.
+access needs only the server's CORS allow-list (and, for a client certificate, see below).
 
 ## 🦕 Deno, Bun and Cloudflare Workers
 
@@ -145,25 +145,91 @@ A URL with credentials in it is refused. A wrapper can add a scheme of its own (
 
 `connect` takes exactly one credential:
 
-| Option                 | Grant                                                                                                        |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `username`, `password` | `password` (§4.1); any character, `:` and `@` included                                                       |
-| `token`                | A Warp SQL access token issued elsewhere, used as is and never renewed                                       |
-| `tokenProvider`        | A function returning a fresh access token, called at connect and whenever the server refuses the current one |
-| `subjectToken`         | An identity provider's token (string or function) for the `token_exchange` grant (SSO)                       |
+| Option                           | Grant                                                                                                                |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `username`, `password`           | `password` (§4.1); any character, `:` and `@` included                                                               |
+| `token`                          | A Warp SQL access token issued elsewhere, used as is and never renewed                                               |
+| `tokenProvider`                  | A function returning a fresh access token, called at connect and whenever the server refuses the current one         |
+| `subjectToken`                   | An identity provider's token (string or function) for the `token_exchange` grant (SSO)                               |
+| `authType: "client_certificate"` | The TLS client certificate alone, no password (§4.4); see [Client certificate sign-in](#-client-certificate-sign-in) |
 
 Other `connect` options:
 
-| Option                                                                                                         | Default        | Meaning                                                                                      |
-| -------------------------------------------------------------------------------------------------------------- | -------------- | -------------------------------------------------------------------------------------------- |
-| `catalog`, `schema`, `sessionOptions`                                                                          |                | The session's options (§5.3), replayed on a replacement session                              |
-| `tls`                                                                                                          | system         | Node, Deno, Bun: `{ ca, cert, key, servername, skipVerify }` (PEM text)                      |
-| `fetch`                                                                                                        | global         | Your own `fetch` (not together with `tls`)                                                   |
-| `maxAttempts`                                                                                                  | `4`            | Sends of a request that is safe to repeat, first included                                    |
-| `reconnect`                                                                                                    | `true`         | Replace a session the server lost                                                            |
-| `resultBufferBytes`                                                                                            | 128 MiB        | How much of an unread stream may be read ahead when the session is needed for something else |
-| `logger`                                                                                                       | `console.warn` | `{ debug, warn }`; session replacements are warnings                                         |
-| `async`, `retainResult`, `statementTimeoutMs`, `queryTag`, `ipcCompression`, `resultPartitions`, `resultOrder` |                | Defaults for every statement (below)                                                         |
+| Option                                                                                                         | Default        | Meaning                                                                                             |
+| -------------------------------------------------------------------------------------------------------------- | -------------- | --------------------------------------------------------------------------------------------------- |
+| `catalog`, `schema`, `sessionOptions`                                                                          |                | The session's options (§5.3), replayed on a replacement session                                     |
+| `tls`                                                                                                          | system         | Node, Deno, Bun: `{ ca, cert, key, servername, skipVerify }` (PEM text)                             |
+| `fetch`                                                                                                        | global         | Your own `fetch` (not together with `tls`)                                                          |
+| `fetchCredentials`                                                                                             | runtime's      | fetch's credentials mode; `"include"` by default in a browser with `authType: "client_certificate"` |
+| `maxAttempts`                                                                                                  | `4`            | Sends of a request that is safe to repeat, first included                                           |
+| `reconnect`                                                                                                    | `true`         | Replace a session the server lost                                                                   |
+| `resultBufferBytes`                                                                                            | 128 MiB        | How much of an unread stream may be read ahead when the session is needed for something else        |
+| `logger`                                                                                                       | `console.warn` | `{ debug, warn }`; session replacements are warnings                                                |
+| `async`, `retainResult`, `statementTimeoutMs`, `queryTag`, `ipcCompression`, `resultPartitions`, `resultOrder` |                | Defaults for every statement (below)                                                                |
+
+## 🔐 Client certificate sign-in
+
+On a server that offers it (capability `mtls_identity`: Hardcharger with
+`mtls_certificate_sign_in`, warp-duckdb with `--mtls-certificate-sign-in`), the TLS client
+certificate is the credential: the client sends the `client_certificate` grant with no password,
+and the server maps the certificate's identity (by default its e-mail SAN) to a user. In Node, Deno
+and Bun the certificate is `tls.cert` and `tls.key`:
+
+```js
+import { readFileSync } from "node:fs";
+
+import { WarpSqlError, connect } from "@gizmodata/warp-sql";
+
+const conn = await connect({
+  url: "warp://db.example.com:31337",
+  authType: "client_certificate",
+  tls: {
+    ca: readFileSync("ca.pem", "utf8"),
+    cert: readFileSync("client.pem", "utf8"),
+    key: readFileSync("client-key.pem", "utf8"),
+  },
+});
+console.log((await conn.query("SELECT HARDCHARGER_USER() AS who")).getChild("who").get(0)); // ops@example.com
+```
+
+The token the server issues is bound to the certificate (RFC 8705), and renewed with the same
+grant. Every request goes through the connection's one undici dispatcher, which presents the
+certificate on every connection it opens, so the partitions of a split result, read at once over
+connections of their own, carry it too. The client refuses, before sending anything, a username,
+password or token beside it, a plain-HTTP URL, and (in Node) a missing `tls.cert`/`tls.key`; and,
+after discovery, a server that does not list `mtls_identity` and the grant (`not_implemented`).
+
+In a browser the certificate is the one the user picks from the browser's store, so there are no
+`tls` options: the client sends every request with `credentials: "include"`, without which a
+browser presents no certificate on a cross-origin request.
+
+```js
+const conn = await connect({ url: "https://db.example.com:31337", authType: "client_certificate" });
+```
+
+On another origin than the server's, that needs the server to allow credentials for the page's
+origin (`Access-Control-Allow-Credentials`, spec §9.5), which the warp-sql SDK does from its
+`feat/cors-credentials` branch on (not yet in a released server), and certificates optional at the
+handshake, because CORS preflights carry no credentials. A page served by the server itself
+(Hardcharger's UI) needs neither.
+
+The server's refusals keep their spec codes (§4.4), each a `401`:
+
+| Code                            | When                                                                                        |
+| ------------------------------- | ------------------------------------------------------------------------------------------- |
+| `client_certificate_required`   | No certificate on the connection (a server where certificates are optional)                 |
+| `unknown_certificate_identity`  | The certificate's identity is missing, ambiguous, or not a user allowed to sign in this way |
+| `certificate_revoked`           | Revoked, or no longer verifying, after the connection was set up                            |
+| `certificate_mismatch`          | A certificate-bound token over a connection without that certificate                        |
+| `certificate_identity_mismatch` | A password or token sign-in for another identity than the connection's certificate          |
+
+```js
+try {
+  await connect({ url, authType: "client_certificate", tls: { ca, cert: otherCert, key: otherKey } });
+} catch (err) {
+  if (WarpSqlError.is(err, "unknown_certificate_identity")) console.log(err.code, err.status); // ... 401
+}
+```
 
 ## 🧭 API
 
@@ -291,14 +357,17 @@ npm run size            # the browser bundle's size
 
 The live suites start the server binary named by `WARP_SQL_JS_TEST_SERVER_BINARY` on free ports,
 with a password containing `:` and `@`: one shared plain-HTTP server, plus servers of their own for
-TLS, mutual TLS and short-lived tokens. Without the variable they fail; they never skip, and a run in
+TLS, mutual TLS, certificate sign-in (test/live/mtls.test.ts: every certificate code but
+`certificate_revoked`, which the unit tests cover) and short-lived tokens. Without the variable they fail; they never skip, and a run in
 which no test reached a server fails too.
 
 ```bash
 export WARP_SQL_JS_TEST_SERVER_BINARY=/path/to/warp-duckdb
-npm run test:live       # Node (vitest), 99 tests
+npm run test:live       # Node (vitest), 105 tests
 npm run test:smoke      # Node, Deno, Bun and workerd (needs a build)
 npm run test:browser    # Chromium and WebKit (Playwright; needs a build)
+npm run test:browser:mtls  # certificate sign-in from a page on another origin (needs a build, and a
+                           # server that allows CORS credentials: warp-sql feat/cors-credentials)
 ```
 
 For Hardcharger, name its flags and password variable
@@ -315,7 +384,7 @@ it), and stubbing out the server-side cancel makes the cancel tests fail. The fa
 in [test/live/helpers.ts](test/live/helpers.ts) cuts result streams and drops answers to test
 resumption and idempotent retries against the real server.
 
-CI runs all of it against the Hardcharger release image (`ghcr.io/gizmodata/hardcharger`, private).
+CI runs all of it but `test:browser:mtls` against the Hardcharger image of its main branch (`ghcr.io/gizmodata/hardcharger:main`, private).
 The image's package must grant this repository read access (package settings, "Manage Actions
 access"), or the live jobs fail.
 

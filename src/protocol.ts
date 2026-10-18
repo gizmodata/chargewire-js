@@ -14,6 +14,7 @@ export const Capability = {
   resultPartitions: "result_partitions",
   partitionedIngest: "partitioned_ingest",
   oauthBrowser: "oauth_browser",
+  mtlsIdentity: "mtls_identity",
 } as const;
 
 /** The document `GET /warp` returns (§3.1). */

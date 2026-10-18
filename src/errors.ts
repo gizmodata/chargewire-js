@@ -14,6 +14,18 @@ export const ErrorCode = {
   invalidCredentials: "invalid_credentials",
   invalidToken: "invalid_token",
   sessionEnded: "session_ended",
+  /** §4.4: the connection presented no client certificate (a server where certificates are optional). */
+  clientCertificateRequired: "client_certificate_required",
+  /** §4.4: the certificate has no identity the server maps, several, or one not allowed to sign in. */
+  unknownCertificateIdentity: "unknown_certificate_identity",
+  /** §4.4: the certificate was revoked, or no longer verifies, after the connection was set up. */
+  certificateRevoked: "certificate_revoked",
+  /** §4.4: a certificate-bound token on a connection without that certificate. */
+  certificateMismatch: "certificate_mismatch",
+  /** §4.4: a password or token sign-in for another identity than the connection's certificate. */
+  certificateIdentityMismatch: "certificate_identity_mismatch",
+  /** §4.4: a grant the server does not offer, such as client_certificate where certificate sign-in is off. */
+  unsupportedGrantType: "unsupported_grant_type",
   permissionDenied: "permission_denied",
   readOnly: "read_only",
   sessionNotFound: "session_not_found",

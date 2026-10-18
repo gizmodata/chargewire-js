@@ -68,6 +68,22 @@ export interface ConnectOptions extends StatementOptions {
   tokenProvider?: () => string | Promise<string>;
   /** An identity provider's token (e.g. an OIDC ID token) for the `token_exchange` grant; a function is called for each new token. */
   subjectToken?: string | (() => string | Promise<string>);
+  /**
+   * `"client_certificate"`: sign in with the TLS client certificate alone, no password
+   * (§4.4; servers with capability `mtls_identity`). In Node, Deno and Bun the certificate
+   * is `tls.cert` and `tls.key`; in a browser it is the one the user picks, and requests
+   * are sent with `credentials: "include"` (see `fetchCredentials`). The token the server
+   * issues is bound to the certificate and renewed with it. Takes no username, password or
+   * token. Default: `"password"` (or whichever credential is given).
+   */
+  authType?: "password" | "client_certificate";
+  /**
+   * fetch's credentials mode for every request. Browsers present a client certificate on
+   * a cross-origin request only with `"include"` (and then need the server to allow
+   * credentials for the page's origin). Default: `"include"` in a browser with
+   * `authType: "client_certificate"`, otherwise the runtime's default.
+   */
+  fetchCredentials?: RequestCredentials;
   /** The session's current catalog and schema (§5.3). */
   catalog?: string;
   schema?: string;
@@ -124,6 +140,17 @@ export async function connect(options: ConnectOptions): Promise<Connection> {
   if (options.tls !== undefined && options.fetch !== undefined) {
     throw invalidArgument("pass either tls or fetch: tls settings cannot be applied to a fetch of your own");
   }
+  if (options.tls !== undefined && (options.tls.cert === undefined) !== (options.tls.key === undefined)) {
+    throw invalidArgument("tls.cert and tls.key go together: a client certificate needs its private key");
+  }
+  if (credentials.kind === "certificate") {
+    if (base.protocol !== "https:") {
+      throw invalidArgument(`authType "client_certificate" needs TLS, but ${base.href} is plain HTTP`);
+    }
+    if (platform.name === "node" && options.fetch === undefined && options.tls?.cert === undefined) {
+      throw invalidArgument('authType "client_certificate" needs a client certificate: set tls.cert and tls.key');
+    }
+  }
   const fetchFn =
     options.fetch ??
     (options.tls !== undefined
@@ -142,6 +169,9 @@ export async function connect(options: ConnectOptions): Promise<Connection> {
     maxAttempts: options.maxAttempts ?? 4,
     userAgent: options.userAgent,
     logger,
+    fetchCredentials:
+      options.fetchCredentials ??
+      (credentials.kind === "certificate" && platform.name === "web" ? "include" : undefined),
   });
   const settings = resolveSettings(defaultsFrom(options), options);
   const resultBufferBytes = options.resultBufferBytes ?? defaultResultBufferBytes;
@@ -150,8 +180,26 @@ export async function connect(options: ConnectOptions): Promise<Connection> {
 
   const discovery = await discover(http, options.signal);
   const grant =
-    credentials.kind === "password" ? "password" : credentials.kind === "subject" ? "token_exchange" : undefined;
+    credentials.kind === "password"
+      ? "password"
+      : credentials.kind === "subject"
+        ? "token_exchange"
+        : credentials.kind === "certificate"
+          ? "client_certificate"
+          : undefined;
   const grants = discovery.auth?.grant_types;
+  if (
+    credentials.kind === "certificate" &&
+    !(discovery.capabilities?.includes(Capability.mtlsIdentity) === true && grants?.includes(grant!) === true)
+  ) {
+    throw new WarpSqlError({
+      code: ErrorCode.notImplemented,
+      message:
+        `the server does not offer client certificate sign-in (capability ${Capability.mtlsIdentity}, ` +
+        `grant client_certificate): it needs TLS with client CAs and certificate sign-in turned on ` +
+        `(it offers ${Array.isArray(grants) ? grants.join(", ") || "none" : "no grant list"})`,
+    });
+  }
   if (grant !== undefined && Array.isArray(grants) && !grants.includes(grant)) {
     throw new WarpSqlError({
       code: ErrorCode.notImplemented,
@@ -173,6 +221,22 @@ export async function connect(options: ConnectOptions): Promise<Connection> {
 }
 
 function credentialsFrom(options: ConnectOptions): Credentials {
+  if (options.authType !== undefined && options.authType !== "password" && options.authType !== "client_certificate") {
+    throw invalidArgument(
+      `authType must be "password" or "client_certificate", not ${JSON.stringify(options.authType)}`,
+    );
+  }
+  if (options.authType === "client_certificate") {
+    const extra = (["username", "password", "token", "tokenProvider", "subjectToken"] as const).filter(
+      (name) => options[name] !== undefined,
+    );
+    if (extra.length > 0) {
+      throw invalidArgument(
+        `authType "client_certificate" signs in with the client certificate alone; do not also pass ${extra.join(", ")}`,
+      );
+    }
+    return { kind: "certificate" };
+  }
   const given = [
     options.password !== undefined ? "password" : undefined,
     options.token !== undefined ? "token" : undefined,
@@ -182,7 +246,7 @@ function credentialsFrom(options: ConnectOptions): Credentials {
   if (given.length !== 1) {
     throw invalidArgument(
       given.length === 0
-        ? "credentials are required: username and password, token, tokenProvider, or subjectToken"
+        ? 'credentials are required: username and password, token, tokenProvider, subjectToken, or authType "client_certificate"'
         : `pass one kind of credential, not ${given.join(" and ")}`,
     );
   }
