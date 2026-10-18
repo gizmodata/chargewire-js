@@ -8,6 +8,10 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- An explicit port 443 was dropped from a plain-HTTP URL: `warp://host:443?tls=false` and
+  `http://host:443` dialled port 80, and a wrapper's scheme with a default port of its own
+  (`hardcharger://host:443`) dialled that default instead of 443. The URL is parsed as https,
+  which drops 443 as its default; the port is now taken from the URL's text.
 - A Number beyond `Number.MAX_SAFE_INTEGER` in JSON parameters (or any JSON body) is written in
   exponent form, so the server reads exactly that double. `JSON.stringify` wrote `2 ** 63` as
   `9223372036854776000`, another integer, which a server that binds wide integers exactly (spec

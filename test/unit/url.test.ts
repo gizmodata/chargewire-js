@@ -24,6 +24,13 @@ describe("parseUrl", () => {
     ["https://h", "https://h/warp"],
     ["http://h:8080/warp", "http://h:8080/warp"],
     ["warp://[::1]:9", "https://[::1]:9/warp"],
+    // An explicit port that is https's default (443) or http's (80) is kept for the other scheme.
+    ["warp://h:443?tls=false", "http://h:443/warp"],
+    ["http://h:443", "http://h:443/warp"],
+    ["warp://h:80", "https://h:80/warp"],
+    ["warp://h:443", "https://h/warp"],
+    ["http://h:80", "http://h/warp"],
+    ["warp://[::1]:443?tls=false", "http://[::1]:443/warp"],
   ])("%s → %s", (raw, want) => {
     expect(parseUrl(raw).href).toBe(want);
   });
@@ -48,6 +55,10 @@ describe("parseUrl", () => {
     const schemes = { ...defaultSchemes, hardcharger: { tls: true, tlsParameter: true, defaultPort: 31337 } };
     expect(parseUrl("hardcharger://db.example.com", schemes).href).toBe("https://db.example.com:31337/warp");
     expect(parseUrl("hardcharger://db.example.com:1?tls=false", schemes).href).toBe("http://db.example.com:1/warp");
+    // An explicit 443 is that port, not "no port" (which would get the wrapper's default).
+    expect(parseUrl("hardcharger://db.example.com:443", schemes).href).toBe("https://db.example.com/warp");
+    expect(parseUrl("hardcharger://db.example.com:443?tls=false", schemes).href).toBe("http://db.example.com:443/warp");
+    expect(parseUrl("hardcharger://db.example.com:", schemes).href).toBe("https://db.example.com:31337/warp");
     refused("hardcharger://db"); // not without the wrapper's map
   });
 

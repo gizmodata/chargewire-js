@@ -87,12 +87,26 @@ export function parseUrl(raw: string, schemes: SchemeMap = defaultSchemes): URL 
     throw invalidArgument(`invalid url ${redact(raw)}: unknown parameter(s) ${unknown.join(", ")}`);
   }
 
-  const port = url.port !== "" ? url.port : definition.defaultPort !== undefined ? String(definition.defaultPort) : "";
+  // The URL is parsed as https, which drops a port of 443 as https's default: take an explicit
+  // port from the text, so warp://host:443?tls=false and http://host:443 dial 443 (not 80), and
+  // a wrapper's scheme with a default port of its own keeps an explicit :443.
+  const explicit = explicitPort(raw.slice(match[0].length));
+  const port =
+    explicit ??
+    (url.port !== "" ? url.port : definition.defaultPort !== undefined ? String(definition.defaultPort) : "");
   const path = url.pathname.replace(/\/+$/, "");
   const base = new URL(`${tls ? "https" : "http"}://${url.host}`);
   base.port = port;
   base.pathname = path === "" ? (definition.defaultBasePath ?? defaultBasePath) : path;
   return base;
+}
+
+/** The port written in a URL's authority (after `scheme://`), or undefined when it names none. */
+function explicitPort(rest: string): string | undefined {
+  const authority = /^[^/?#]*/.exec(rest)![0];
+  const hostPort = authority.slice(authority.lastIndexOf("@") + 1);
+  const port = /^(?:\[[^\]]*\]|[^:[\]]*):(\d+)$/.exec(hostPort)?.[1];
+  return port === undefined ? undefined : String(Number(port));
 }
 
 /** The URL without anything secret in it, for error messages. */
