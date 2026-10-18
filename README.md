@@ -140,7 +140,7 @@ Miniflare).
 | `https://host:port[/prefix]`     | Same as `warp://`                                            |
 | `http://host:port[/prefix]`      | Plain HTTP                                                   |
 
-A URL with credentials in it is refused. For Hardcharger, use
+A URL with credentials in it is refused. For Hardcharger™, use
 [`@gizmodata/hardcharger`](https://github.com/gizmodata/hardcharger-js): this client with
 `hardcharger://` URLs (port 31337 unless the URL names one) and Hardcharger names for its classes,
 as a thin package that depends on this one and re-exports it. This package stays the generic
