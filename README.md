@@ -140,8 +140,12 @@ Miniflare).
 | `https://host:port[/prefix]`     | Same as `warp://`                                            |
 | `http://host:port[/prefix]`      | Plain HTTP                                                   |
 
-A URL with credentials in it is refused. A wrapper can add a scheme of its own (a
-`hardcharger://` wrapper is planned) by passing `schemes: { ...defaultSchemes, hardcharger: { tls: true, tlsParameter: true, defaultPort: 31337 } }`.
+A URL with credentials in it is refused. For Hardcharger, use
+[`@gizmodata/hardcharger`](https://github.com/gizmodata/hardcharger-js): this client with
+`hardcharger://` URLs (port 31337 unless the URL names one) and Hardcharger names for its classes,
+as a thin package that depends on this one and re-exports it. This package stays the generic
+client for any Warp SQL server. Another wrapper can add a scheme of its own by passing
+`schemes: { ...defaultSchemes, myscheme: { tls: true, tlsParameter: true, defaultPort: 4000 } }`.
 
 `connect` takes exactly one credential:
 

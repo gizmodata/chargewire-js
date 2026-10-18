@@ -6,6 +6,11 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Changed
+
+- The README points Hardcharger users to `@gizmodata/hardcharger` (gizmodata/hardcharger-js), the
+  `hardcharger://` client built on this package, instead of saying such a wrapper is planned.
+
 ### Fixed
 
 - An explicit port 443 was dropped from a plain-HTTP URL: `warp://host:443?tls=false` and
