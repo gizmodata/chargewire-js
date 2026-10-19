@@ -77,7 +77,8 @@ export class Core {
   }
 
   checkOpen(): void {
-    if (this.closed) throw new WarpSqlError({ code: ErrorCode.connectionClosed, message: "the connection is closed" });
+    if (this.closed)
+      throw new WarpSqlError({ code: ErrorCode.clientConnectionClosed, message: "the connection is closed" });
   }
 
   /** Runs cleanup off the caller's path; its failure is only logged. */

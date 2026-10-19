@@ -118,7 +118,38 @@ describe("browser sign-in, step by step (§4.3)", () => {
     );
     const err = await expectCode(pollBrowserSignIn({ url, fetch: server.fetch, flow }), ErrorCode.accessDenied);
     expect(err.detail).toBe("the user said no");
-    expect(err.status).toBe(401);
+    expect(err.status).toBeUndefined(); // a failed flow's code is never a response's status (§11)
+  });
+
+  test("a flow state the client doesn't know is not terminal: it keeps polling (§12)", async () => {
+    const server = browserServer();
+    let polls = 0;
+    server.on("POST", /^\/warp\/v1\/auth\/oauth\/flows\/f_\d+$/, () =>
+      ++polls < 3
+        ? json(200, { state: "some_future_state" })
+        : json(200, { state: "complete", access_token: "tz", token_type: "Bearer", expires_in: 60 }),
+    );
+    const flow = await startBrowserSignIn({ url, fetch: server.fetch });
+    expect(await pollBrowserSignIn({ url, fetch: server.fetch, flow })).toEqual({ state: "pending" });
+    const result = await browserSignIn({ url, fetch: server.fetch, openUrl: () => {} });
+    expect(result).toEqual({ accessToken: "tz", expiresIn: 60 });
+    expect(polls).toBe(3);
+    // An answer with no state at all does not follow the protocol.
+    server.on("POST", /^\/warp\/v1\/auth\/oauth\/flows\/f_\d+$/, () => json(200, {}));
+    await expectCode(pollBrowserSignIn({ url, fetch: server.fetch, flow }), ErrorCode.clientProtocolError);
+  });
+
+  test("a failed flow's error.code the client doesn't know is kept, a generic failure; one without a code is a protocol error", async () => {
+    const server = browserServer();
+    server.on("POST", /^\/warp\/v1\/auth\/oauth\/flows\/f_1$/, () =>
+      json(200, { state: "failed", error: { code: "some_future_failure", detail: "later" } }),
+    );
+    server.on("POST", /^\/warp\/v1\/auth\/oauth\/flows\/f_2$/, () => json(200, { state: "failed", error: {} }));
+    const first = await startBrowserSignIn({ url, fetch: server.fetch });
+    const err = await expectCode(pollBrowserSignIn({ url, fetch: server.fetch, flow: first }), "some_future_failure");
+    expect(err.detail).toBe("later");
+    const second = await startBrowserSignIn({ url, fetch: server.fetch });
+    await expectCode(pollBrowserSignIn({ url, fetch: server.fetch, flow: second }), ErrorCode.clientProtocolError);
   });
 
   test("the server's refusals of a flow come through with their codes", async () => {
@@ -137,15 +168,15 @@ describe("browser sign-in, step by step (§4.3)", () => {
   test("refused before sending: an absolute returnTo, a malformed flow, an answer without a secret", async () => {
     const server = browserServer();
     for (const returnTo of ["https://evil.test/", "evil.test", ""]) {
-      await expectCode(startBrowserSignIn({ url, fetch: server.fetch, returnTo }), ErrorCode.invalidArgument);
+      await expectCode(startBrowserSignIn({ url, fetch: server.fetch, returnTo }), ErrorCode.clientInvalidArgument);
     }
     await expectCode(
       pollBrowserSignIn({ url, fetch: server.fetch, flow: { flowId: "../sessions", pollSecret: secret } }),
-      ErrorCode.invalidArgument,
+      ErrorCode.clientInvalidArgument,
     );
     expect(server.requests).toHaveLength(0);
     server.on("POST", /\/auth\/oauth\/flows$/, () => json(201, { flow_id: "f_1", authorize_url: authorizeUrl }));
-    await expectCode(startBrowserSignIn({ url, fetch: server.fetch }), ErrorCode.protocolError);
+    await expectCode(startBrowserSignIn({ url, fetch: server.fetch }), ErrorCode.clientProtocolError);
   });
 
   test("the provider's name from discovery", () => {
@@ -167,9 +198,9 @@ describe("browserSignIn and connect", () => {
     const slow = browserServer({ pendingPolls: 1_000_000 });
     await expectCode(
       browserSignIn({ url, fetch: slow.fetch, openUrl: () => {}, timeoutMs: 50 }),
-      ErrorCode.statementTimeout,
+      ErrorCode.clientSignInTimeout,
     );
-    await expectCode(browserSignIn({ url, fetch: slow.fetch } as never), ErrorCode.invalidArgument);
+    await expectCode(browserSignIn({ url, fetch: slow.fetch } as never), ErrorCode.clientInvalidArgument);
   });
 
   test('connect with authType "oauth_browser" signs in through the browser and uses the token', async () => {
@@ -217,15 +248,18 @@ describe("browserSignIn and connect", () => {
   test("bad combinations are refused", async () => {
     const server = browserServer();
     const base = { url, fetch: server.fetch, logger: quiet };
-    await expectCode(connect({ ...base, authType: "oauth_browser" }), ErrorCode.invalidArgument);
+    await expectCode(connect({ ...base, authType: "oauth_browser" }), ErrorCode.clientInvalidArgument);
     await expectCode(
       connect({ ...base, authType: "oauth_browser", openUrl: () => {}, username: "u", password: "p" }),
-      ErrorCode.invalidArgument,
+      ErrorCode.clientInvalidArgument,
     );
-    await expectCode(connect({ ...base, username: "u", password: "p", openUrl: () => {} }), ErrorCode.invalidArgument);
+    await expectCode(
+      connect({ ...base, username: "u", password: "p", openUrl: () => {} }),
+      ErrorCode.clientInvalidArgument,
+    );
     await expectCode(
       connect({ ...base, authType: "oauth_browser", openUrl: () => {}, browserSignInTimeoutMs: -1 }),
-      ErrorCode.invalidArgument,
+      ErrorCode.clientInvalidArgument,
     );
     expect(server.requests).toHaveLength(0);
   });

@@ -112,7 +112,7 @@ describe("one session, several results", () => {
       for await (const _ of stream) {
         // the buffered part, then the error
       }
-    }, ErrorCode.resultBufferExceeded);
+    }, ErrorCode.clientResultBufferExceeded);
     // Its positive twin: read first, then run the next statement, and nothing is dropped.
     let rows = 0;
     for await (const batch of conn.stream("SELECT i FROM range(3000000) t(i)")) rows += batch.numRows;

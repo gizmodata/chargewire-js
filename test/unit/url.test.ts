@@ -8,7 +8,7 @@ const refused = (raw: string, schemes = defaultSchemes): WarpSqlError => {
     parseUrl(raw, schemes);
   } catch (err) {
     expect(err).toBeInstanceOf(WarpSqlError);
-    expect((err as WarpSqlError).code).toBe(ErrorCode.invalidArgument);
+    expect((err as WarpSqlError).code).toBe(ErrorCode.clientInvalidArgument);
     return err as WarpSqlError;
   }
   throw new Error(`${raw} was accepted`);

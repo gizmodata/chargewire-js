@@ -26,12 +26,15 @@ describe("TLS", () => {
       expect(uri(server)).toBe(`warp://${server.host}`); // TLS is warp://'s default
       // Without the CA the certificate is unknown: a transport error, not retried.
       const started = Date.now();
-      const err = await expectCode(open({}, server), ErrorCode.transportError);
+      const err = await expectCode(open({}, server), ErrorCode.clientTransportError);
       expect(err.message).toMatch(/certificate|self.signed|issuer/i);
       expect(Date.now() - started).toBeLessThan(1500);
       const insecure = await open({ tls: { skipVerify: true } }, server);
       expect(await scalar(insecure, "SELECT 2")).toBe(2);
-      await expectCode(open({ tls: { ca: ca.caPem, servername: "db.example.com" } }, server), ErrorCode.transportError);
+      await expectCode(
+        open({ tls: { ca: ca.caPem, servername: "db.example.com" } }, server),
+        ErrorCode.clientTransportError,
+      );
       const named = await open({ tls: { ca: ca.caPem, servername: "localhost" } }, server);
       expect(await scalar(named, "SELECT 3")).toBe(3);
     } finally {
@@ -52,7 +55,7 @@ describe("TLS", () => {
     try {
       const conn = await open({ tls: { ca: ca.caPem, cert: ca.clientCertPem, key: ca.clientKeyPem } }, server);
       expect(await scalar(conn, "SELECT 1")).toBe(1);
-      await expectCode(open({ tls: { ca: ca.caPem } }, server), ErrorCode.transportError);
+      await expectCode(open({ tls: { ca: ca.caPem } }, server), ErrorCode.clientTransportError);
     } finally {
       await server.stop();
     }
@@ -74,7 +77,7 @@ describe("TLS", () => {
   test("tls and fetch cannot both be given", async () => {
     await expectCode(
       connect({ url: uri(), username: testUsername, password: shared.password, tls: {}, fetch }),
-      ErrorCode.invalidArgument,
+      ErrorCode.clientInvalidArgument,
     );
   });
 });
@@ -110,12 +113,15 @@ describe("authentication", () => {
   });
 
   test("credentials are checked before anything is sent", async () => {
-    await expectCode(connect({ url: uri() } as never), ErrorCode.invalidArgument);
-    await expectCode(connect({ url: uri(), password: "x" }), ErrorCode.invalidArgument); // no username
-    await expectCode(connect({ url: uri(), username: "u", password: "p", token: "t" }), ErrorCode.invalidArgument);
+    await expectCode(connect({ url: uri() } as never), ErrorCode.clientInvalidArgument);
+    await expectCode(connect({ url: uri(), password: "x" }), ErrorCode.clientInvalidArgument); // no username
+    await expectCode(
+      connect({ url: uri(), username: "u", password: "p", token: "t" }),
+      ErrorCode.clientInvalidArgument,
+    );
     await expectCode(
       connect({ url: `warp://joe:secret@${shared.host}?tls=false`, username: "joe", password: "x" }),
-      ErrorCode.invalidArgument,
+      ErrorCode.clientInvalidArgument,
     );
   });
 
@@ -123,7 +129,7 @@ describe("authentication", () => {
     const port = await freePort();
     await expectCode(
       connect({ url: `http://127.0.0.1:${port}`, username: "u", password: "p", maxAttempts: 1 }),
-      ErrorCode.transportError,
+      ErrorCode.clientTransportError,
     );
   });
 
@@ -137,7 +143,7 @@ describe("authentication", () => {
       const port = (other.address() as AddressInfo).port;
       const err = await expectCode(
         connect({ url: `http://127.0.0.1:${port}`, username: "u", password: "p" }),
-        ErrorCode.protocolError,
+        ErrorCode.clientProtocolError,
       );
       expect(err.message).toContain("does not describe a Warp SQL server");
     } finally {
@@ -154,7 +160,7 @@ describe("authentication", () => {
       "warp://h:1?color=blue",
       "warp://:1",
     ]) {
-      await expectCode(connect({ url, username: "u", password: "p" }), ErrorCode.invalidArgument);
+      await expectCode(connect({ url, username: "u", password: "p" }), ErrorCode.clientInvalidArgument);
     }
     reached();
     const conn = await connect({

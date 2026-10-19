@@ -15,7 +15,7 @@ import {
   sleep,
 } from "./http.js";
 import { Capability, type StatementDocument, isTerminal } from "./protocol.js";
-import { type BatchSource, PartReader, PartitionedReader, SequentialReader, isArrowResponse } from "./result.js";
+import { type BatchSource, PartReader, PartitionedReader, isArrowResponse } from "./result.js";
 import { sessionPath } from "./session.js";
 
 /** How long a status request may wait on the server (long poll, §6.3), in seconds. */
@@ -68,6 +68,11 @@ export class Execution {
   sent = false;
   /** The application cancelled the statement. */
   cancelled = false;
+  /**
+   * The request said the client reads partitions held by other servers (`Warp-Result-Locations:
+   * remote`, capability `result_locations`, §6.2). Without it, a partition's location must be null.
+   */
+  readonly remoteLocations: boolean;
   readonly #controller = new AbortController();
   readonly #userSignal: AbortSignal | undefined;
   readonly #onAbort: (() => void) | undefined;
@@ -88,6 +93,7 @@ export class Execution {
     this.body = body;
     this.prepared = prepared;
     this.#userSignal = signal;
+    this.remoteLocations = core.has(Capability.resultLocations);
     core.running++;
     if (signal !== undefined) {
       if (signal.aborted) {
@@ -142,6 +148,8 @@ export class Execution {
       headers["Warp-Result-Partitions"] = String(s.resultPartitions);
       if (s.resultOrder === "any") headers["Warp-Result-Order"] = "any";
     }
+    // This client reads partitions from their locations; it says so only to a server that offers it.
+    if (this.remoteLocations) headers["Warp-Result-Locations"] = "remote";
     return {
       method: "POST",
       path: this.#path(sessionId),
@@ -171,9 +179,16 @@ export class Execution {
   /** Sends the submission again with the same Idempotency-Key, to learn its statement without running it twice (§6.7). */
   async #recall(signal: AbortSignal): Promise<string | undefined> {
     if (this.body.stream !== undefined || this.sessionId === undefined) return undefined;
-    const doc = await this.core.http.json<StatementDocument>(
-      this.#request(this.sessionId, { arrow: false, async: true }, signal),
-    );
+    let doc: StatementDocument;
+    try {
+      doc = await this.core.http.json<StatementDocument>(
+        this.#request(this.sessionId, { arrow: false, async: true }, signal),
+      );
+    } catch (err) {
+      // A statement that already failed or was cancelled may answer with its error (§6.1).
+      if (err instanceof WarpSqlError && err.statementId !== undefined) return err.statementId;
+      throw err;
+    }
     return typeof doc.statement_id === "string" ? doc.statement_id : undefined;
   }
 
@@ -309,15 +324,23 @@ export class Execution {
 
   /** Ends a run that went wrong and returns the error to report. */
   fail(err: unknown): unknown {
+    // A statement that failed or was cancelled by the time its submit was answered names
+    // itself on the error response (§6.1), so it can still be freed.
+    if (this.statementId === undefined && err instanceof WarpSqlError && err.statementId !== undefined) {
+      this.statementId = err.statementId;
+    }
     const reported = this.cancelled || this.signal.aborted ? this.cancelledError() : err;
     this.finish();
     return reported;
   }
 }
 
-/** Whether an error means the server does not have the endpoint called. */
+/** Whether an error means the server does not have the endpoint called (an answer without a problem document by its status). */
 export function unsupported(err: unknown): boolean {
-  return WarpSqlError.is(err, ErrorCode.notFound, ErrorCode.methodNotAllowed, ErrorCode.notImplemented);
+  if (WarpSqlError.is(err, ErrorCode.notFound, ErrorCode.methodNotAllowed, ErrorCode.notImplemented)) return true;
+  return (
+    WarpSqlError.is(err, ErrorCode.clientHttpError) && (err.status === 404 || err.status === 405 || err.status === 501)
+  );
 }
 
 export async function decodeStatement(resp: Response): Promise<StatementDocument> {
@@ -357,7 +380,7 @@ export async function runRows(exec: Execution): Promise<Rows> {
       return await fromDocument(exec, await exec.waitDone(doc));
     }
     exec.statementId = resp.headers.get("warp-statement-id") ?? undefined;
-    const split = splitHeaders(resp);
+    const split = await splitHeaders(resp);
     if (split !== undefined) {
       // A split result (§6.10): this body is partition 0; the others are read at once.
       const stop = new AbortController();
@@ -383,11 +406,30 @@ export async function runRows(exec: Execution): Promise<Rows> {
   }
 }
 
-/** Reads how a streamed result was split (§6.10). */
-function splitHeaders(resp: Response): { k: number; order: "interleaved" | "any" } | undefined {
-  const k = Number(resp.headers.get("warp-result-partitions"));
-  if (!Number.isInteger(k) || k < 2 || k > maxResultPartitions) return undefined;
-  return { k, order: resp.headers.get("warp-result-order") === "interleaved" ? "interleaved" : "any" };
+/**
+ * Reads how a streamed result was split (§6.10). With more than one partition the answer
+ * carries both `Warp-Result-Partitions` and `Warp-Result-Order`; a missing or unknown order
+ * is never guessed, it is a protocol error.
+ */
+async function splitHeaders(resp: Response): Promise<{ k: number; order: "interleaved" | "any" } | undefined> {
+  const header = resp.headers.get("warp-result-partitions");
+  if (header === null) return undefined;
+  const k = /^\d+$/.test(header.trim()) ? Number(header.trim()) : Number.NaN;
+  if (k === 1) return undefined;
+  if (!Number.isInteger(k) || k < 1 || k > maxResultPartitions) {
+    await discard(resp);
+    throw protocolError(`the result came back with an invalid Warp-Result-Partitions ${JSON.stringify(header)}`);
+  }
+  const order = resp.headers.get("warp-result-order");
+  if (order !== "interleaved" && order !== "any") {
+    await discard(resp);
+    throw protocolError(
+      order === null
+        ? `the result came back in ${k} partitions without Warp-Result-Order`
+        : `the result came back in ${k} partitions with an unknown Warp-Result-Order ${JSON.stringify(order)}`,
+    );
+  }
+  return { k, order };
 }
 
 /** Turns a finished statement into its rows or its count. */
@@ -396,19 +438,38 @@ async function fromDocument(exec: Execution, doc: StatementDocument): Promise<Ro
   const result = doc.result;
   if (result === undefined || result === null)
     throw protocolError(`statement ${doc.statement_id} succeeded without a result`);
-  if (result.kind !== "rows") {
+  if (result.kind === "update") {
     exec.finish();
     const affected = typeof result.rows_affected === "number" ? result.rows_affected : null;
     return { source: emptySource(), statementId: doc.statement_id, rowsAffected: affected, partitions: 0 };
   }
+  if (result.kind !== "rows") {
+    // A new kind reaches only a client that asked for it (§12).
+    throw protocolError(`statement ${doc.statement_id} has a result of unknown kind ${JSON.stringify(result.kind)}`);
+  }
   const partitions = result.partitions ?? [{ index: 0 }];
   if (partitions.length === 0) throw protocolError(`statement ${doc.statement_id} has a row result without partitions`);
-  const order = result.partition_order;
-  const local = partitions.length > 1 && (order === "interleaved" || order === "any");
+  const locations = partitions.map((p) => partitionLocation(exec, p.index, p.location));
+  if (partitions.length === 1) {
+    const reader = new PartReader(exec, partitions[0]!.index, locations[0], exec.signal);
+    await reader.open();
+    return { source: ending(exec, reader), statementId: doc.statement_id, rowsAffected: undefined, partitions: 1 };
+  }
+  // More than one partition: the result says how its rows are spread (§6.10), and every
+  // partition, on this server or another, is read at once.
+  const given = result.partition_order;
+  const order = given === "interleaved" ? "interleaved" : given === "any" ? "any" : undefined;
+  if (order === undefined) {
+    throw protocolError(
+      given === undefined
+        ? `statement ${doc.statement_id} has ${partitions.length} partitions without a partition_order`
+        : `statement ${doc.statement_id} has an unknown partition_order ${JSON.stringify(given)}`,
+    );
+  }
   const stop = new AbortController();
-  const signal = local ? AbortSignal.any([exec.signal, stop.signal]) : exec.signal;
-  const parts = partitions.map((p) => new PartReader(exec, p.index, partitionLocation(p.index, p.location), signal));
-  const reader = local ? new PartitionedReader(parts, order, stop) : new SequentialReader(parts);
+  const signal = AbortSignal.any([exec.signal, stop.signal]);
+  const parts = partitions.map((p, i) => new PartReader(exec, p.index, locations[i], signal));
+  const reader = new PartitionedReader(parts, order, stop);
   await reader.open();
   return {
     source: ending(exec, reader),
@@ -418,8 +479,14 @@ async function fromDocument(exec: Execution, doc: StatementDocument): Promise<Ro
   };
 }
 
-function partitionLocation(index: number, location: string | null | undefined): URL | undefined {
+function partitionLocation(exec: Execution, index: number, location: string | null | undefined): URL | undefined {
   if (location === null || location === undefined || location === "") return undefined;
+  if (!exec.remoteLocations) {
+    // A server gives a location only to a request that asked for them (§6.2).
+    throw protocolError(
+      `partition ${index} is on another server (${JSON.stringify(location)}), but the request did not accept remote partitions`,
+    );
+  }
   let url: URL;
   try {
     url = new URL(location);

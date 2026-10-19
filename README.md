@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/gizmodata/warp-sql"><img src="https://img.shields.io/badge/protocol-Warp%20SQL%20draft%200.1.0-31a8db.svg" alt="Warp SQL protocol"></a>
+  <a href="https://github.com/gizmodata/warp-sql"><img src="https://img.shields.io/badge/protocol-Warp%20SQL%201.0.0-31a8db.svg" alt="Warp SQL protocol"></a>
   <img src="https://img.shields.io/badge/TypeScript-ESM%20%2B%20CJS-3178C6.svg?logo=typescript&logoColor=white" alt="TypeScript, ESM and CJS">
   <a href="https://arrow.apache.org/docs/js/"><img src="https://img.shields.io/badge/results-Apache%20Arrow-f15a24.svg" alt="Apache Arrow results"></a>
   <img src="https://img.shields.io/badge/Node-%E2%89%A522.19-339933.svg?logo=node.js&logoColor=white" alt="Node 22.19 or later">
@@ -222,7 +222,7 @@ The server's refusals keep their spec codes (§4.4), each a `401`:
 
 | Code                            | When                                                                                        |
 | ------------------------------- | ------------------------------------------------------------------------------------------- |
-| `client_certificate_required`   | No certificate on the connection (a server where certificates are optional)                 |
+| `certificate_required`          | No certificate on the connection (a server where certificates are optional)                 |
 | `unknown_certificate_identity`  | The certificate's identity is missing, ambiguous, or not a user allowed to sign in this way |
 | `certificate_revoked`           | Revoked, or no longer verifying, after the connection was set up                            |
 | `certificate_mismatch`          | A certificate-bound token over a connection without that certificate                        |
@@ -287,7 +287,9 @@ The steps are also there one by one: `startBrowserSignIn` (→ `flowId`, `pollSe
 the flow's code: `access_denied` (the person or the provider refused), `invalid_credentials`
 (the server does not let that user in), `identity_provider_error`; a flow that expired or was
 already collected, or a wrong poll secret, is `flow_not_found`, and a `returnTo` that is not a
-path on the server is `invalid_return_to`.
+path on the server is `invalid_return_to`. A failed flow's code has no `status` (the poll answer itself was a `200`), a
+code a later version adds is kept as sent, and a flow state the client doesn't know counts as
+`pending` (§12). A sign-in not completed within its timeout is `client_sign_in_timeout`.
 
 ## 🧭 API
 
@@ -301,10 +303,10 @@ path on the server is `invalid_return_to`.
 | `conn.ingest(table, data, { mode, catalog, schema, temporary })`                                                                                             | rows written; `data` is a Table, a RecordBatch or an (async) iterable of batches                                                    |
 | `conn.metadata.catalogs()`, `dbSchemas()`, `tables()`, `tableTypes()`, `primaryKeys()`, `importedKeys()`, `exportedKeys()`, `crossReference()`, `typeInfo()` | `arrow.Table` with Flight SQL's schema (§10)                                                                                        |
 | `conn.metadata.columns({ … })`                                                                                                                               | `ColumnInfo[]`: name, Arrow field, type name, nullability, precision, scale, default                                                |
-| `conn.metadata.serverInfo()`                                                                                                                                 | the server-info document                                                                                                            |
+| `conn.metadata.serverInfo()`                                                                                                                                 | the server-info document (`ServerInfo`: `server_name`, `server_read_only`, …; a missing key is unknown)                             |
 | `conn.transaction(async (tx) => …)`                                                                                                                          | commits, or rolls back on a throw                                                                                                   |
 | `conn.setAutocommit(bool)`, `commit()`, `rollback()`, `setOptions({…})`, `getSession()`                                                                      |                                                                                                                                     |
-| `conn.transactionState()`                                                                                                                                    | `"none"`, `"open"` or `"aborted"` (§5.2), as the engine has it                                                                      |
+| `conn.transactionState()`                                                                                                                                    | `"none"`, `"open"` or `"aborted"` (§5.2), as the engine has it; `"unknown"` for a value a later version adds                        |
 | `conn.close()`                                                                                                                                               | ends the session; or `await using conn = await connect(…)` (Node 24+, Deno, Bun)                                                    |
 
 Parameters are values, never SQL text. An array binds positionally (`?`, `$1`), an object by
@@ -320,7 +322,7 @@ Statement options, per call or as `connect` defaults:
 | `async`              | `false`                | Submit, long-poll, then fetch a retained result: no request stays open for a whole query |
 | `retainResult`       | server's               | `true` keeps the result on the server so a broken download resumes                       |
 | `statementTimeoutMs` |                        | The server cancels the statement after this long (§6.9)                                  |
-| `queryTag`           |                        | A JSON object recorded with the statement                                                |
+| `queryTag`           |                        | A JSON object the server may record (sent as ASCII JSON, at most 4,096 bytes)            |
 | `resultPartitions`   | 8 (Node), 4 (browsers) | Read up to this many partitions of a result at once (§6.10); `1`: one stream             |
 | `resultOrder`        | `preserve`             | `any` lets a split result come back in any row order                                     |
 | `ipcCompression`     | `none`                 | `zstd`: accept ZSTD-compressed Arrow buffers in results (§8.2)                           |
@@ -331,22 +333,28 @@ Statement options, per call or as `connect` defaults:
   document, so `query` returns an empty table and `execute` the count. With `async`, the client
   submits, long-polls the status (§6.3) and fetches the retained result.
 - **Never a short table.** Every Arrow stream is checked for its end-of-stream marker. A stream that
-  stops without it throws: the statement's own error if it failed (§6.6), `incomplete_stream`
+  stops without it throws: the statement's own error if it failed (§6.6), `client_incomplete_stream`
   otherwise. A retained result resumes from the next batch first (up to five times); an unretained
   one cannot, and the error says to use `retainResult` or `async`.
 - **Split results** (§6.10). On a server with `result_partitions`, the client asks for up to 8
   partitions (4 in browsers), reads them all at once over separate connections with two batches of
   buffering each, and merges them: round robin for `preserve` (so `ORDER BY` holds), as they arrive
   for `any`. Any partition failing fails the whole result; cancelling or closing stops them all. A
-  server without the capability never sees the headers. Partitions on other servers (§6.2) are read
-  one after another.
+  server without the capability never sees the headers. A split answer without `Warp-Result-Order`
+  (or a document without `partition_order`) is a `client_protocol_error`, never guessed. Partitions
+  on other servers (§6.2, capability `result_locations`) are read at once with the rest; the client
+  sends `Warp-Result-Locations: remote` only to a server that lists the capability.
 - **Retries.** Every submit, prepared execute and ingest carries an `Idempotency-Key`, so a request
   whose answer was lost is sent again without running twice (§6.7). Reads, deletes and keyed writes
   are retried after transport errors and 421/429/502/503/504, honouring `Retry-After`. Commit and
   rollback are never retried. Uploads up to 16 MiB are held in memory so they can be retried;
   larger ones stream (Node, Deno, Bun) and are sent once.
-- **Tokens** are renewed before they expire and, once, when the server refuses one.
-- **Lost sessions** (`session_not_found`, or `session_ended` for an expired token) are replaced by a
+- **Tokens** are renewed before they expire and, once, when the server refuses one with
+  `invalid_token` without a reason, with `token_expired` or with a reason the client doesn't know.
+  After `token_revoked`, `credentials_changed` or `principal_dropped` (§4.2) the client does not sign
+  in again on its own: the error carries the `reason`.
+- **Lost sessions** (`session_not_found`, or `session_ended` for an expired token when the client
+  can get a new token, which it does first) are replaced by a
   new session with the options the client set, and the loss is reported, not hidden: a warning,
   `conn.sessionReplacements`, and errors from work on the replacement say so. Inside a transaction
   nothing runs on the replacement (it would commit half a transaction). A prepared statement is
@@ -361,17 +369,22 @@ Statement options, per call or as `connect` defaults:
 - **One session, several results.** A server may hold other work on a session until a streaming
   result has been read (Hardcharger 0.2 does). Before the session does anything else, the client
   reads what open streams still hold into memory, up to `resultBufferBytes`; a bigger rest is
-  dropped, and reading on raises `result_buffer_exceeded`.
-- **Partitioned uploads** (spec §8.3, one ingest over several connections) are designed for and
-  come once the section lands on warp-sql's main branch; until then `ingest` sends one stream.
+  dropped, and reading on raises `client_result_buffer_exceeded`.
+- **Partitioned uploads** (spec §8.3, one ingest over several connections) are not implemented yet:
+  `ingest` sends one stream (§8.1).
+- **Open enumerations** (§12). A statement state the client doesn't know is not final (it keeps
+  polling), an unknown `reason` or `cancel_reason` is kept as sent, an unknown session `transaction`
+  reads as `"unknown"`, and an unknown error code is judged by its HTTP status.
 - **Capabilities.** Nothing the server's discovery document does not list is used: prepared
   statements, ingest, transactions, partitions and zstd fail with `not_implemented` or stay off.
 
 ## ⚠️ Errors
 
 Every error is a `WarpSqlError` with a stable `code`: the server's problem-document code (§11),
-or one of the client's own. It also carries `status`, `sqlstate`, `detail`, `requestId`,
-`statementId`, `reason` (on `session_ended`) and `cancelReason`.
+or one of the client's own, which begin with `client_` (servers never send those). Decide on
+`code`, never on `title` or `detail`. It also carries `status`, `sqlstate`, `detail`, `requestId`,
+`statementId` (also on a statement that failed or was cancelled before its submit was answered),
+`reason` (on `invalid_token` and `session_ended`) and `cancelReason`.
 
 ```js
 try {
@@ -381,14 +394,19 @@ try {
 }
 ```
 
-| Client code              | When                                                                            |
-| ------------------------ | ------------------------------------------------------------------------------- |
-| `invalid_argument`       | An argument the client refuses before sending anything                          |
-| `transport_error`        | No HTTP answer (refused, reset, a certificate the client does not trust)        |
-| `protocol_error`         | An answer that does not follow the protocol, or a server that is not Warp SQL   |
-| `incomplete_stream`      | A result stream ended without its end-of-stream marker and could not be resumed |
-| `result_buffer_exceeded` | A stream set aside for another request did not fit `resultBufferBytes`          |
-| `connection_closed`      | The connection was closed                                                       |
+| Client code                     | When                                                                            |
+| ------------------------------- | ------------------------------------------------------------------------------- |
+| `client_invalid_argument`       | An argument the client refuses before sending anything                          |
+| `client_transport_error`        | No HTTP answer (refused, reset, a certificate the client does not trust)        |
+| `client_protocol_error`         | An answer that does not follow the protocol, or a server that is not Warp SQL   |
+| `client_http_error`             | An error answer without a problem document (a proxy's page); see `status`       |
+| `client_incomplete_stream`      | A result stream ended without its end-of-stream marker and could not be resumed |
+| `client_result_buffer_exceeded` | A stream set aside for another request did not fit `resultBufferBytes`          |
+| `client_connection_closed`      | The connection was closed                                                       |
+| `client_sign_in_timeout`        | A browser sign-in (§4.3) the person did not complete in the time allowed        |
+
+A TLS alert `certificate_required` or `certificate_revoked` (a server refusing the client
+certificate at the handshake, §4.4) is reported with that code, not as `client_transport_error`.
 
 ## 🗜️ zstd
 

@@ -140,7 +140,7 @@ describe("client certificate sign-in (§4.4)", () => {
     }
   });
 
-  test("where certificates are optional, a grant without one is client_certificate_required", async () => {
+  test("where certificates are optional, a grant without one is certificate_required", async () => {
     const ca = makeCA();
     const server = await certificateServer(ca, ["--mtls-require-client-cert=false"]);
     const noCertificate = new Agent({ connect: { ca: ca.caPem } });
@@ -151,7 +151,7 @@ describe("client certificate sign-in (§4.4)", () => {
       reached();
       await expectCode(
         connect({ url: uri(server), authType: "client_certificate", fetch: fetchWithoutCertificate, logger: quiet }),
-        ErrorCode.clientCertificateRequired,
+        ErrorCode.certificateRequired,
       );
       // The twins: the certificate signs in, and a password works without one.
       expect(await scalar(await open(certificate(ca), server), "SELECT 2")).toBe(2);

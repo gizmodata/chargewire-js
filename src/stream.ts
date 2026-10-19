@@ -168,7 +168,7 @@ export class ResultStream implements AsyncIterableIterator<RecordBatch, undefine
       }
       // Too big to hold: drop the rest, and say so when the reader gets there.
       this.#dropped = new WarpSqlError({
-        code: ErrorCode.resultBufferExceeded,
+        code: ErrorCode.clientResultBufferExceeded,
         statementId: rows.statementId,
         message:
           `the rest of this result was dropped: another request needed the connection's session while the result ` +

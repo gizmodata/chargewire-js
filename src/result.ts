@@ -171,7 +171,7 @@ export class PartReader implements BatchSource {
   /** Whether an error is the stream breaking off (a cut connection, a missing marker), which a resume may cure. */
   #breakage(err: unknown): boolean {
     if (this.#signal.aborted || this.#exec.cancelled) return true; // reported as the cancellation by #recover
-    if (err instanceof WarpSqlError) return err.code === ErrorCode.incompleteStream;
+    if (err instanceof WarpSqlError) return err.code === ErrorCode.clientIncompleteStream;
     return (
       err instanceof TypeError || (err instanceof Error && /terminated|network|socket|reset|aborted/i.test(err.message))
     );
@@ -238,7 +238,7 @@ function describe(err: unknown): string {
 }
 
 /**
- * A result split into partitions on this server (§6.10): every partition read at once,
+ * A result split into partitions (§6.10), on this server or others (§6.2): every partition read at once,
  * each over its own connection with its own PartReader, merged into one stream.
  * `interleaved` partitions are merged round robin, which is the result's order; `any`
  * partitions as their batches arrive. The result is complete only when every partition
@@ -268,28 +268,46 @@ export class PartitionedReader implements BatchSource {
     return this.#parts[0]!.schema;
   }
 
-  /** Opens partition 0 (its schema is the result's) and starts every download. */
+  /**
+   * Starts every download at once (§6.10: partitions are read concurrently, never one after
+   * another) and waits for partition 0, whose schema is the result's.
+   */
   async open(): Promise<void> {
-    try {
-      await this.#parts[0]!.open();
-    } catch (err) {
-      await this.#shutdown();
-      throw err;
-    }
     const k = this.#parts.length;
     if (this.#order === "interleaved") {
       this.#queues = this.#parts.map(() => new AsyncQueue<RecordBatch>(partitionBuffer));
     } else {
       this.#merged = new AsyncQueue<RecordBatch>(partitionBuffer * k, k);
     }
-    this.#pumps = this.#parts.map((part, i) => this.#pump(part, i));
+    let opened!: () => void;
+    let failed!: (err: unknown) => void;
+    const first = new Promise<void>((resolve, reject) => {
+      opened = resolve;
+      failed = reject;
+    });
+    first.catch(() => {}); // reported by open() and the pumps
+    this.#pumps = this.#parts.map((part, i) => this.#pump(part, i, first, i === 0 ? { opened, failed } : undefined));
+    try {
+      await first;
+    } catch (err) {
+      await this.#shutdown();
+      throw this.#failure ?? err;
+    }
   }
 
-  async #pump(part: PartReader, i: number): Promise<void> {
+  async #pump(
+    part: PartReader,
+    i: number,
+    first: Promise<void>,
+    zero: { opened: () => void; failed: (err: unknown) => void } | undefined,
+  ): Promise<void> {
     const queue = this.#merged ?? this.#queues[i]!;
     try {
-      if (i > 0) {
-        await part.open();
+      await part.open();
+      if (zero !== undefined) {
+        zero.opened();
+      } else {
+        await first;
         if (!util.compareSchemas(part.schema, this.schema)) {
           throw protocolError(`partition ${part.index} has another schema than partition 0`);
         }
@@ -302,6 +320,7 @@ export class PartitionedReader implements BatchSource {
       queue.close();
     } catch (err) {
       this.#fail(err);
+      zero?.failed(this.#failure);
     } finally {
       await part.close();
     }
@@ -312,7 +331,7 @@ export class PartitionedReader implements BatchSource {
     this.#failed = true;
     this.#failure = err;
     this.#stop.abort(
-      new WarpSqlError({ code: ErrorCode.executionError, message: "another partition failed", cause: err }),
+      new WarpSqlError({ code: ErrorCode.statementCancelled, message: "another partition failed", cause: err }),
     );
     for (const queue of this.#queues) queue.fail(err);
     this.#merged?.fail(err);
@@ -369,42 +388,6 @@ export class PartitionedReader implements BatchSource {
   async close(): Promise<void> {
     if (this.#done && this.#pumps.length === 0) return;
     await this.#shutdown();
-  }
-}
-
-/** Partitions read one after another: those on other servers (§6.2), whose order the result does not fix. */
-export class SequentialReader implements BatchSource {
-  readonly #parts: PartReader[];
-  #current = 0;
-
-  constructor(parts: PartReader[]) {
-    this.#parts = parts;
-  }
-
-  get schema(): Schema {
-    return this.#parts[0]!.schema;
-  }
-
-  async open(): Promise<void> {
-    await this.#parts[0]!.open();
-  }
-
-  async next(): Promise<IteratorResult<RecordBatch, undefined>> {
-    while (this.#current < this.#parts.length) {
-      const part = this.#parts[this.#current]!;
-      await part.open();
-      if (this.#current > 0 && !util.compareSchemas(part.schema, this.schema)) {
-        throw protocolError(`partition ${part.index} has another schema than partition 0`);
-      }
-      const result = await part.next();
-      if (!result.done) return result;
-      this.#current++;
-    }
-    return { value: undefined, done: true };
-  }
-
-  async close(): Promise<void> {
-    await Promise.all(this.#parts.map((part) => part.close()));
   }
 }
 

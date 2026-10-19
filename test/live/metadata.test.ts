@@ -102,7 +102,16 @@ describe("metadata (§10)", () => {
     expect(types.numRows).toBeGreaterThan(5);
     expect(types.schema.fields.map((f) => f.name)).toContain("type_name");
     const info = await conn.metadata.serverInfo();
-    expect(typeof info["server_name"]).toBe("string");
+    expect(typeof info.server_name).toBe("string");
+    // The frozen keys of version 1 (§10), with their types; the protocol's own name and version are in discovery.
+    expect(typeof info.server_version).toBe("string");
+    expect(typeof info.server_arrow_version).toBe("string");
+    expect(typeof info.server_read_only).toBe("boolean");
+    expect(info.sql_identifier_quote_char).toBe('"');
+    expect(typeof info.sql_transactions_supported).toBe("boolean");
+    for (const gone of ["protocol", "protocol_version", "transactions_supported", "read_only", "engine"]) {
+      expect(info, gone).not.toHaveProperty(gone);
+    }
   });
 
   test("session options: current catalog and schema; refusals name the option", async () => {

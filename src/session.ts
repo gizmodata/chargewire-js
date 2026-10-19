@@ -2,7 +2,7 @@
 
 import { ErrorCode, WarpSqlError, problemError, protocolError } from "./errors.js";
 import { type HttpClient, type HttpRequest, decodeJSON, discard, jsonBody } from "./http.js";
-import type { OptionsResult, SessionDocument } from "./protocol.js";
+import { type OptionsResult, type SessionDocument, transactionState } from "./protocol.js";
 
 /**
  * What a request may do when the server no longer has its session (§5.6). The server
@@ -22,11 +22,19 @@ export function sessionPath(id: string): string {
   return "/v1/sessions/" + encodeURIComponent(id);
 }
 
-/** Whether `err` says the session is gone in a way a new session cures. */
-export function isSessionLost(err: unknown): err is WarpSqlError {
+/**
+ * Whether `err` says the session is gone in a way a new session cures (§5.6): the server
+ * doesn't have it (`session_not_found`), or ended it because its token expired and the
+ * client can get a new token (`canRenew`), which it must before opening a new session.
+ * After `credentials_changed`, `principal_dropped` or `token_revoked` the client may not sign
+ * in again on its own (§4.2), and an administrator's `killed` (or a reason the client
+ * doesn't know) is reported, not papered over: those are the error.
+ */
+export function isSessionLost(err: unknown, canRenew: boolean): err is WarpSqlError {
   return (
     err instanceof WarpSqlError &&
-    (err.code === ErrorCode.sessionNotFound || (err.code === ErrorCode.sessionEnded && err.reason === "token_expired"))
+    (err.code === ErrorCode.sessionNotFound ||
+      (err.code === ErrorCode.sessionEnded && err.reason === "token_expired" && canRenew))
   );
 }
 
@@ -109,18 +117,20 @@ export class Session {
   }
 
   #checkOpen(): void {
-    if (this.#closed) throw new WarpSqlError({ code: ErrorCode.connectionClosed, message: "the connection is closed" });
+    if (this.#closed)
+      throw new WarpSqlError({ code: ErrorCode.clientConnectionClosed, message: "the connection is closed" });
   }
 
   /** Opens a replacement for session `failedId`, unless that already happened; returns the current id. */
-  async #replace(failedId: string, cause: WarpSqlError): Promise<string> {
+  async #replace(failedId: string, cause: WarpSqlError, tokenUsed: string | undefined): Promise<string> {
     this.#checkOpen();
     if (this.#id !== failedId) return this.#id;
     if (this.#replacing?.failedId === failedId) return this.#replacing.promise;
     const promise = (async () => {
-      if (cause.code === ErrorCode.sessionEnded) {
-        // §5.6: get a new access token before creating a new session.
-        await this.#http.renewToken(await this.#http.accessToken());
+      if (cause.code === ErrorCode.sessionEnded && this.#http.currentToken === tokenUsed) {
+        // §5.6: get a new access token before creating a new session (unless the request that
+        // found the session gone already did, after its own invalid_token).
+        await this.#http.renewToken(tokenUsed);
       }
       const doc = await create(this.#http, this.#options);
       this.#id = doc.session_id;
@@ -146,14 +156,15 @@ export class Session {
     this.#checkOpen();
     const id = this.#id;
     const req = build(id);
+    const tokenUsed = this.#http.currentToken;
     try {
       return await this.#http.request(req);
     } catch (err) {
-      if (!isSessionLost(err)) throw err;
+      if (!isSessionLost(err, this.#http.canRenew)) throw err;
       if (!this.#reconnect) throw sessionLostError(err, id, undefined, lostWhat);
       let newId: string;
       try {
-        newId = await this.#replace(id, err);
+        newId = await this.#replace(id, err, tokenUsed);
       } catch (replaceErr) {
         throw sessionLostError(err, id, undefined, lostWhat).with({
           message:
@@ -179,14 +190,15 @@ export class Session {
   /** Sends a request about a handle that lives in session `sessionId`, which may no longer be the current one. */
   async doHandle(sessionId: string, what: string, req: HttpRequest): Promise<Response> {
     this.#checkOpen();
+    const tokenUsed = this.#http.currentToken;
     try {
       return await this.#http.request(req);
     } catch (err) {
-      if (!isSessionLost(err)) throw err;
+      if (!isSessionLost(err, this.#http.canRenew)) throw err;
       if (sessionId !== this.#id || !this.#reconnect) throw sessionLostError(err, sessionId, undefined, what);
       let newId: string | undefined;
       try {
-        newId = await this.#replace(sessionId, err);
+        newId = await this.#replace(sessionId, err, tokenUsed);
       } catch {
         newId = undefined;
       }
@@ -202,7 +214,8 @@ export class Session {
       idempotent: true,
       signal,
     }));
-    return decodeJSON<SessionDocument>(resp);
+    const doc = await decodeJSON<SessionDocument>(resp);
+    return { ...doc, transaction: transactionState(doc.transaction) };
   }
 
   /** Sets session options (§5.3), remembering the ones the server took so a replacement gets them. */

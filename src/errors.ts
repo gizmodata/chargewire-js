@@ -2,8 +2,9 @@
 
 /**
  * Error codes. The server's codes are spec §11's; a code the client does not know is
- * kept as the server sent it and judged by its HTTP status (§12). The client adds a few
- * of its own for failures that have no server answer.
+ * kept as the server sent it and judged by its HTTP status (§12). The client's own codes,
+ * for failures it found itself with no problem document from the server, begin with
+ * `client_` (§11), a prefix servers never send.
  */
 export const ErrorCode = {
   // Spec §11.
@@ -11,11 +12,15 @@ export const ErrorCode = {
   unknownOption: "unknown_option",
   invalidOptionValue: "invalid_option_value",
   sqlError: "sql_error",
+  /** §4.4: a grant the server does not offer, such as client_certificate where certificate sign-in is off. */
+  unsupportedGrantType: "unsupported_grant_type",
   invalidCredentials: "invalid_credentials",
+  /** §4.2: the token is missing, malformed, expired or no longer stands; `reason` may say why. */
   invalidToken: "invalid_token",
+  /** §5.6: the server ended the session; `reason` says why. */
   sessionEnded: "session_ended",
-  /** §4.4: the connection presented no client certificate (a server where certificates are optional). */
-  clientCertificateRequired: "client_certificate_required",
+  /** §4.4: the connection presented no client certificate (a server where certificates are optional), or a TLS alert `certificate_required`. */
+  certificateRequired: "certificate_required",
   /** §4.4: the certificate has no identity the server maps, several, or one not allowed to sign in. */
   unknownCertificateIdentity: "unknown_certificate_identity",
   /** §4.4: the certificate was revoked, or no longer verifies, after the connection was set up. */
@@ -24,63 +29,109 @@ export const ErrorCode = {
   certificateMismatch: "certificate_mismatch",
   /** §4.4: a password or token sign-in for another identity than the connection's certificate. */
   certificateIdentityMismatch: "certificate_identity_mismatch",
-  /** §4.4: a grant the server does not offer, such as client_certificate where certificate sign-in is off. */
-  unsupportedGrantType: "unsupported_grant_type",
-  /** §4.3.2: no such browser sign-in flow, a wrong poll secret, or one already collected or expired. */
+  /** §4.3.2: no such browser sign-in flow, a wrong poll secret, or one already collected or expired (404). */
   flowNotFound: "flow_not_found",
-  /** §4.3.3: a returnTo that is not a path on the server's own origin. */
+  /** §4.3.3: a returnTo that is not a path on the server's own origin (400). */
   invalidReturnTo: "invalid_return_to",
-  /** §4.3.2: the person or the identity provider refused the browser sign-in. */
+  /** §4.3.2, a failed flow's error.code: the person or the identity provider refused the browser sign-in. */
   accessDenied: "access_denied",
-  /** §4.3.2: the server could not complete the browser sign-in with the identity provider. */
+  /** §4.3.2, a failed flow's error.code: the server could not complete the browser sign-in with the identity provider. */
   identityProviderError: "identity_provider_error",
   permissionDenied: "permission_denied",
   readOnly: "read_only",
   sessionNotFound: "session_not_found",
+  /** No such statement, or one the server has forgotten (§6.5). */
   statementNotFound: "statement_not_found",
   preparedNotFound: "prepared_not_found",
   ingestNotFound: "ingest_not_found",
+  /** §6.4: the result has no partition with that index. */
+  partitionNotFound: "partition_not_found",
+  /** No such endpoint. */
   notFound: "not_found",
   methodNotAllowed: "method_not_allowed",
   resultNotReady: "result_not_ready",
   resultNotResumable: "result_not_resumable",
-  resultExpired: "result_expired",
   ingestIncomplete: "ingest_incomplete",
   ingestPartExists: "ingest_part_exists",
+  /** 409; `cancelReason` says why (§6.2). */
+  statementCancelled: "statement_cancelled",
+  /** 409: the statement's timeout ran out (§6.9). */
+  statementTimeout: "statement_timeout",
+  resultExpired: "result_expired",
   ingestExpired: "ingest_expired",
   payloadTooLarge: "payload_too_large",
   unsupportedArrowType: "unsupported_arrow_type",
   sessionElsewhere: "session_elsewhere",
   idempotencyKeyReused: "idempotency_key_reused",
-  headersTooLarge: "headers_too_large",
+  /** 422: the statement failed while running (a division by zero, a constraint, a conversion). */
+  executionError: "execution_error",
   tooManySessions: "too_many_sessions",
   resultQuotaExceeded: "result_quota_exceeded",
   rateLimited: "rate_limited",
-  statementTimeout: "statement_timeout",
-  statementCancelled: "statement_cancelled",
-  executionError: "execution_error",
-  serverDraining: "server_draining",
+  headersTooLarge: "headers_too_large",
+  /** 500: the server failed in a way that is not the request's doing. */
+  internalError: "internal_error",
   notImplemented: "not_implemented",
+  serverDraining: "server_draining",
 
-  // Client-side: no server answer carries these.
+  // The client's own (§11): no server answer carries these.
   /** An argument or option the client refuses before sending anything. */
-  invalidArgument: "invalid_argument",
+  clientInvalidArgument: "client_invalid_argument",
   /** The request got no HTTP answer (connection refused, reset, TLS failure). */
-  transportError: "transport_error",
+  clientTransportError: "client_transport_error",
   /** The server answered something that does not follow the protocol. */
-  protocolError: "protocol_error",
+  clientProtocolError: "client_protocol_error",
+  /** An error answer without a problem document (a proxy's page, say); `status` says what it was. */
+  clientHttpError: "client_http_error",
   /** An Arrow stream ended without its end-of-stream marker and could not be resumed (§6.6). */
-  incompleteStream: "incomplete_stream",
+  clientIncompleteStream: "client_incomplete_stream",
   /** A streamed result was set aside for another request and did not fit the buffer. */
-  resultBufferExceeded: "result_buffer_exceeded",
+  clientResultBufferExceeded: "client_result_buffer_exceeded",
   /** The connection was closed. */
-  connectionClosed: "connection_closed",
+  clientConnectionClosed: "client_connection_closed",
+  /** A browser sign-in (§4.3) the person did not complete in the time allowed. */
+  clientSignInTimeout: "client_sign_in_timeout",
 } as const;
 
 export type KnownErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
 
-/** Why a session ended (§5.6), on `session_ended` errors. */
-export type SessionEndedReason = "killed" | "credentials_changed" | "principal_dropped" | "token_expired";
+/**
+ * Why a session ended (§5.6), on `session_ended` errors. Later versions may add reasons
+ * (§12): treat one this list lacks as a generic "the session is gone".
+ */
+export type SessionEndedReason =
+  "killed" | "credentials_changed" | "principal_dropped" | "token_revoked" | "token_expired" | (string & {});
+
+/**
+ * Why the server refused an authentic token (§4.2), on `invalid_token` errors. Absent for a
+ * token the server cannot verify as its own. Later versions may add reasons (§12).
+ */
+export type InvalidTokenReason =
+  "token_expired" | "token_revoked" | "credentials_changed" | "principal_dropped" | (string & {});
+
+/**
+ * Why a statement was cancelled (§6.2), on `statement_cancelled` and `statement_timeout`
+ * errors. Later versions may add reasons (§12): treat one this list lacks as generic.
+ */
+export type CancelReason =
+  | "client"
+  | "timeout"
+  | "session_closed"
+  | "killed"
+  | "cancelled"
+  | "privilege_revoked"
+  | "server_shutdown"
+  | (string & {});
+
+/**
+ * Whether an `invalid_token` refusal with this `reason` may be cured by signing in again
+ * (§4.2): no reason, `token_expired`, or a reason this client doesn't know. After
+ * `token_revoked`, `credentials_changed` or `principal_dropped`, a client does not sign in
+ * again on its own, and reports the reason instead.
+ */
+export function tokenRenewable(reason: string | undefined): boolean {
+  return reason !== "token_revoked" && reason !== "credentials_changed" && reason !== "principal_dropped";
+}
 
 /** An RFC 9457 problem document as the server sends it (§11). */
 export interface ProblemDocument {
@@ -91,7 +142,10 @@ export interface ProblemDocument {
   detail?: string;
   sqlstate?: string;
   request_id?: string;
+  /** On `invalid_token` (§4.2) and `session_ended` (§5.6). */
   reason?: string;
+  /** On `statement_cancelled` and `statement_timeout` (§6.2). */
+  cancel_reason?: string;
   [key: string]: unknown;
 }
 
@@ -132,13 +186,13 @@ export class WarpSqlError extends Error {
   readonly sqlstate: string | undefined;
   /** The server's id for the request (`Warp-Request-Id`), also in its logs. */
   readonly requestId: string | undefined;
-  /** On `session_ended`: why (§5.6). */
+  /** On `invalid_token` (§4.2) and `session_ended` (§5.6): why. A value the client doesn't know is a generic one (§12). */
   readonly reason: string | undefined;
   /** The server's `Retry-After`, in milliseconds. */
   readonly retryAfterMs: number | undefined;
   /** The statement the error belongs to, when known. */
   readonly statementId: string | undefined;
-  /** On a cancelled statement: why (§6.2). */
+  /** On a cancelled statement: why (§6.2). A value the client doesn't know is a generic one (§12). */
   readonly cancelReason: string | undefined;
   /** The problem document as received. */
   readonly problem: ProblemDocument | undefined;
@@ -208,31 +262,6 @@ function describe(init: WarpSqlErrorInit): string {
   return text;
 }
 
-/** The code an answer without a problem document stands for (a proxy's HTML page, say). */
-export function codeForStatus(status: number): string {
-  switch (status) {
-    case 401:
-      return ErrorCode.invalidToken;
-    case 403:
-      return ErrorCode.permissionDenied;
-    case 404:
-      return ErrorCode.notFound;
-    case 405:
-      return ErrorCode.methodNotAllowed;
-    case 413:
-      return ErrorCode.payloadTooLarge;
-    case 429:
-      return ErrorCode.rateLimited;
-    case 431:
-      return ErrorCode.headersTooLarge;
-    case 501:
-      return ErrorCode.notImplemented;
-    case 503:
-      return ErrorCode.serverDraining;
-  }
-  return status >= 500 ? ErrorCode.executionError : ErrorCode.badRequest;
-}
-
 /** A problem document (from an answer or inside a statement document) as an error. */
 export function problemError(
   problem: ProblemDocument | undefined,
@@ -240,13 +269,14 @@ export function problemError(
     status?: number;
     requestId?: string | null;
     retryAfterMs?: number;
-    statementId?: string;
+    statementId?: string | null;
     cancelReason?: string;
   } = {},
 ): WarpSqlError {
   const doc: ProblemDocument = problem ?? {};
   const status = typeof doc.status === "number" && doc.status > 0 ? doc.status : context.status;
-  const code = typeof doc.code === "string" && doc.code !== "" ? doc.code : codeForStatus(status ?? 500);
+  // A problem document without a code does not follow the protocol (§11).
+  const code = typeof doc.code === "string" && doc.code !== "" ? doc.code : ErrorCode.clientProtocolError;
   return new WarpSqlError({
     code,
     status,
@@ -257,8 +287,8 @@ export function problemError(
     requestId: str(doc.request_id) ?? context.requestId ?? undefined,
     reason: str(doc.reason),
     retryAfterMs: context.retryAfterMs,
-    statementId: context.statementId,
-    cancelReason: context.cancelReason,
+    statementId: context.statementId ?? undefined,
+    cancelReason: str(doc.cancel_reason) ?? context.cancelReason,
     problem,
   });
 }
@@ -276,6 +306,8 @@ export async function responseError(resp: Response): Promise<WarpSqlError> {
   if (text.length > maxProblemBytes) text = text.slice(0, maxProblemBytes);
   const retryAfterMs = parseRetryAfter(resp.headers.get("retry-after"));
   const requestId = resp.headers.get("warp-request-id");
+  // A statement that failed or was cancelled by the time its submit was answered names itself (§6.1).
+  const statementId = resp.headers.get("warp-statement-id");
   let doc: ProblemDocument | undefined;
   try {
     const parsed: unknown = JSON.parse(text);
@@ -289,17 +321,18 @@ export async function responseError(resp: Response): Promise<WarpSqlError> {
     let detail = text.trim();
     if (detail === "" || detail.length > 512) detail = resp.statusText || `HTTP ${resp.status}`;
     return new WarpSqlError({
-      code: codeForStatus(resp.status),
+      code: ErrorCode.clientHttpError,
       status: resp.status,
       detail,
       requestId: requestId ?? undefined,
       retryAfterMs,
+      statementId: statementId ?? undefined,
     });
   }
-  return problemError(doc, { status: resp.status, requestId, retryAfterMs });
+  return problemError(doc, { status: resp.status, requestId, retryAfterMs, statementId });
 }
 
-/** Reads a Retry-After given in seconds (the HTTP-date form is not used by Warp SQL servers). */
+/** Reads a Retry-After: always integer delta-seconds (§2.6; servers never send the HTTP-date form). */
 export function parseRetryAfter(value: string | null): number | undefined {
   if (value === null) return undefined;
   const trimmed = value.trim();
@@ -312,9 +345,9 @@ function str(value: unknown): string | undefined {
 }
 
 export function invalidArgument(message: string): WarpSqlError {
-  return new WarpSqlError({ code: ErrorCode.invalidArgument, message });
+  return new WarpSqlError({ code: ErrorCode.clientInvalidArgument, message });
 }
 
 export function protocolError(message: string, cause?: unknown): WarpSqlError {
-  return new WarpSqlError({ code: ErrorCode.protocolError, message, cause });
+  return new WarpSqlError({ code: ErrorCode.clientProtocolError, message, cause });
 }

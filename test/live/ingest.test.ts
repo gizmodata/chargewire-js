@@ -115,11 +115,11 @@ describe("bulk ingest", () => {
 
   test("ingest refuses what it cannot send", async () => {
     const conn = await open();
-    await expectCode(conn.ingest("", keyValues([1n], ["a"])), ErrorCode.invalidArgument);
-    await expectCode(conn.ingest("x", [] as RecordBatch[]), ErrorCode.invalidArgument);
+    await expectCode(conn.ingest("", keyValues([1n], ["a"])), ErrorCode.clientInvalidArgument);
+    await expectCode(conn.ingest("x", [] as RecordBatch[]), ErrorCode.clientInvalidArgument);
     await expectCode(
       conn.ingest("x", keyValues([1n], ["a"]), { mode: "upsert" as "append" }),
-      ErrorCode.invalidArgument,
+      ErrorCode.clientInvalidArgument,
     );
     expect(numbers(await conn.query("SELECT 1"))).toEqual([1]);
   });

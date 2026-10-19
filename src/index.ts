@@ -35,6 +35,8 @@ export { Metadata, type ColumnInfo, type MetadataCallOptions } from "./metadata.
 export {
   ErrorCode,
   WarpSqlError,
+  type CancelReason,
+  type InvalidTokenReason,
   type KnownErrorCode,
   type ProblemDocument,
   type SessionEndedReason,
@@ -47,9 +49,11 @@ export type { TlsOptions } from "./platform/types.js";
 export { Capability } from "./protocol.js";
 export type {
   DiscoveryDocument,
+  ServerInfo,
   SessionDocument,
   StatementDocument,
   StatementState,
   TransactionState,
 } from "./protocol.js";
+export { version } from "./version.js";
 export { defaultSchemes, parseUrl, type SchemeDefinition, type SchemeMap } from "./url.js";

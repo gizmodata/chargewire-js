@@ -53,13 +53,15 @@ describe("JSON parameters (§6.1)", () => {
 
   test("values JSON cannot carry are refused with a pointer to Arrow parameters", () => {
     for (const bad of [[new Date()], [Number.NaN], [Infinity], [undefined], [[1]], [{}], [new Uint8Array(1)]]) {
-      expect(() => checkJsonParameters(bad)).toThrow(expect.objectContaining({ code: ErrorCode.invalidArgument }));
+      expect(() => checkJsonParameters(bad)).toThrow(
+        expect.objectContaining({ code: ErrorCode.clientInvalidArgument }),
+      );
     }
     expect(() => checkJsonParameters("x" as never)).toThrow(
-      expect.objectContaining({ code: ErrorCode.invalidArgument }),
+      expect.objectContaining({ code: ErrorCode.clientInvalidArgument }),
     );
     expect(() => checkJsonParameters(new Map() as never)).toThrow(
-      expect.objectContaining({ code: ErrorCode.invalidArgument }),
+      expect.objectContaining({ code: ErrorCode.clientInvalidArgument }),
     );
   });
 });
@@ -93,7 +95,7 @@ describe("parameter rows in the server's types (§7.1)", () => {
   const one = (type: Int8 | Int32 | Int64 | Uint8 | Uint64) => new Schema([new Field("1", type, true)]);
   const refused = (fn: () => unknown, message: RegExp) =>
     expect(fn).toThrow(
-      expect.objectContaining({ code: ErrorCode.invalidArgument, message: expect.stringMatching(message) }),
+      expect.objectContaining({ code: ErrorCode.clientInvalidArgument, message: expect.stringMatching(message) }),
     );
 
   test("an integer outside its parameter's type is refused, never wrapped", () => {
@@ -150,8 +152,8 @@ describe("parameter rows in the server's types (§7.1)", () => {
 
   test("rows of the wrong width, or none, are refused", () => {
     expect(() => parameterRows(schema, [[1n, "a"]])).toThrow(
-      expect.objectContaining({ code: ErrorCode.invalidArgument }),
+      expect.objectContaining({ code: ErrorCode.clientInvalidArgument }),
     );
-    expect(() => parameterRows(schema, [])).toThrow(expect.objectContaining({ code: ErrorCode.invalidArgument }));
+    expect(() => parameterRows(schema, [])).toThrow(expect.objectContaining({ code: ErrorCode.clientInvalidArgument }));
   });
 });

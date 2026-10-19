@@ -59,7 +59,7 @@ describe("prepared statements", () => {
     const conn = await open();
     await conn.execute("CREATE OR REPLACE TABLE p_wrap (id BIGINT)");
     const insert = await conn.prepare("INSERT INTO p_wrap VALUES (?)");
-    const err = await expectCode(insert.executeBatch([[1n], [2n ** 63n]]), ErrorCode.invalidArgument);
+    const err = await expectCode(insert.executeBatch([[1n], [2n ** 63n]]), ErrorCode.clientInvalidArgument);
     expect(err.message).toContain("out of range for Int64");
     expect(await scalar(conn, "SELECT count(*) FROM p_wrap")).toBe(0); // nothing was sent
     // The twin: the largest BIGINT, and a plain Number, go in exactly.
@@ -100,7 +100,7 @@ describe("prepared statements", () => {
     const q = await conn.prepare("SELECT 1 AS one");
     expect((await q.query()).numRows).toBe(1);
     await q.close();
-    await expectCode(q.query(), ErrorCode.invalidArgument);
+    await expectCode(q.query(), ErrorCode.clientInvalidArgument);
   });
 
   test("a prepared statement the server forgot is prepared again", async () => {

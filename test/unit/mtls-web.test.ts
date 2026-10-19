@@ -75,7 +75,7 @@ describe("client certificate sign-in in a browser", () => {
       (e: unknown) => e,
     );
     expect(err).toBeInstanceOf(WarpSqlError);
-    expect((err as WarpSqlError).code).toBe(ErrorCode.invalidArgument);
+    expect((err as WarpSqlError).code).toBe(ErrorCode.clientInvalidArgument);
     expect((err as WarpSqlError).message).toContain("tls options apply in Node");
   });
 });

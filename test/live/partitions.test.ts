@@ -121,9 +121,12 @@ describe("partitioned results", () => {
 
   test("partition options are checked before anything is sent", async () => {
     const conn = await open();
-    await expectCode(conn.query("SELECT 1", undefined, { resultPartitions: 0 }), ErrorCode.invalidArgument);
-    await expectCode(conn.query("SELECT 1", undefined, { resultPartitions: 257 }), ErrorCode.invalidArgument);
-    await expectCode(conn.query("SELECT 1", undefined, { resultOrder: "sorted" as "any" }), ErrorCode.invalidArgument);
+    await expectCode(conn.query("SELECT 1", undefined, { resultPartitions: 0 }), ErrorCode.clientInvalidArgument);
+    await expectCode(conn.query("SELECT 1", undefined, { resultPartitions: 257 }), ErrorCode.clientInvalidArgument);
+    await expectCode(
+      conn.query("SELECT 1", undefined, { resultOrder: "sorted" as "any" }),
+      ErrorCode.clientInvalidArgument,
+    );
     expect((await conn.query("SELECT 1", undefined, { resultPartitions: 6, resultOrder: "any" })).numRows).toBe(1);
   });
 });

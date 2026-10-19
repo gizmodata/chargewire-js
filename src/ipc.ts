@@ -144,7 +144,7 @@ export function readMessageHeader(metadata: Uint8Array): { headerType: number; b
 /** The error for a stream that ended without its end-of-stream marker. */
 export function incompleteStream(detail?: string): WarpSqlError {
   return new WarpSqlError({
-    code: ErrorCode.incompleteStream,
+    code: ErrorCode.clientIncompleteStream,
     message: "the Arrow stream ended without its end-of-stream marker" + (detail ? `: ${detail}` : ""),
   });
 }

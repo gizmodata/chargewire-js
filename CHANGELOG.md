@@ -8,6 +8,32 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- Warp SQL protocol 1.0.0 (warp-sql spec 1.0.0): the client follows the stable version 1.
+- `ErrorCode.partitionNotFound` (`partition_not_found`, §6.4), `ErrorCode.internalError`
+  (`internal_error`, 500) and `ErrorCode.clientHttpError` (`client_http_error`, an error answer
+  without a problem document, such as a proxy's page; `status` says what it was). `ErrorCode` now
+  lists every server code of version 1, and a unit test keeps it so.
+- `Capability.resultLocations` (`result_locations`) and `Capability.ipcCompressionLz4Frame` (the
+  name only; the client still accepts zstd alone). On a server that lists `result_locations` the
+  client sends `Warp-Result-Locations: remote` and reads partitions from their locations; it never
+  sends the header otherwise, and a partition with a location it did not ask for is a
+  `client_protocol_error`.
+- Types `InvalidTokenReason`, `CancelReason` and `ServerInfo` (the frozen version 1 keys of
+  `GET …/metadata/server-info`: `server_name`, `server_version`, `server_arrow_version`,
+  `server_read_only`, `sql_identifier_quote_char`, `sql_transactions_supported`; a missing key is
+  unknown). `conn.metadata.serverInfo()` returns `ServerInfo`. `SessionEndedReason` gains
+  `token_revoked`.
+- `version`, the package's version. In Node, Deno and Bun every request sends
+  `User-Agent: warp-sql-js/<version>` unless `userAgent` says otherwise (browsers set their own).
+- A TLS alert `certificate_required` or `certificate_revoked` from the server's handshake is
+  reported with that code (§4.4), not as a transport error.
+- Tests: unit tests for each 1.0 behaviour (invalid_token and session_ended reasons, unknown
+  states, transaction values, cancel reasons, result kinds and capabilities, the 409/422 submit
+  errors, split results without an order, remote partitions read at once and only when asked for,
+  the query tag's escaping and size, client code names, User-Agent); live tests that a runtime
+  failure is `execution_error` with status 422 on both submit paths, that server-info has the
+  frozen keys with their types and none of the removed ones, and that a non-ASCII query tag is
+  accepted.
 - Browser sign-in (warp-sql spec §4.3, capability `oauth_browser`): `connect({ authType:
   "oauth_browser", openUrl })` signs in with the server's identity provider through a browser and
   refuses a server without the capability before creating a flow; `browserSignIn` does it
@@ -28,11 +54,56 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
+- **Breaking: the client's own error codes begin with `client_`** (spec §11), and their
+  `ErrorCode` keys with `client`: `invalid_argument` is `client_invalid_argument`
+  (`ErrorCode.clientInvalidArgument`), `transport_error` is `client_transport_error`
+  (`clientTransportError`), `protocol_error` is `client_protocol_error` (`clientProtocolError`),
+  `incomplete_stream` is `client_incomplete_stream` (`clientIncompleteStream`),
+  `result_buffer_exceeded` is `client_result_buffer_exceeded` (`clientResultBufferExceeded`) and
+  `connection_closed` is `client_connection_closed` (`clientConnectionClosed`).
+- **Breaking:** `client_certificate_required` is `certificate_required`
+  (`ErrorCode.certificateRequired`), as spec 1.0.0 names it.
+- **Breaking:** an error answer without a problem document is `client_http_error` with its
+  `status`; the client no longer makes up a server code for it from the status (a 502 page was
+  `execution_error`, a 404 page `not_found`).
+- **Breaking:** `Capability.resultRetention` and `Capability.partitionedResults` are gone (spec
+  1.0.0 has no such capabilities: retention is core, and the client reads `retained` before
+  relying on a re-read, as it did), and so is `DiscoveryDocument.draft`.
+- Browser sign-in follows the 1.0 rules: a flow state the client doesn't know is not terminal
+  (it reads as `pending` and polling goes on), a failed flow's `error.code` is kept as sent even
+  when the client doesn't know it, and has no `status` (it was `401`); a failed flow without a
+  code is a `client_protocol_error` (it was `invalid_credentials`), and an answer without a state
+  too. A sign-in not completed in time is `client_sign_in_timeout`
+  (`ErrorCode.clientSignInTimeout`; it was `statement_timeout`).
+- `invalid_token` is renewed (once) only without a reason, with `token_expired` or with a reason
+  the client doesn't know (§4.2). After `token_revoked`, `credentials_changed` or
+  `principal_dropped` the client does not sign in again on its own; the error carries the reason.
+  It used to sign in again whatever the reason.
+- `session_ended` (§5.6): a session ended for an expired token is replaced only when the client
+  can get a new token (not with a fixed `token`), and the client signs in once, not twice, when the
+  request had already renewed its token after `invalid_token`. Other reasons, and reasons the
+  client doesn't know, are the error, as before.
+- Open enumerations (§12): an unknown statement state is not final (the client keeps polling), an
+  unknown `reason` or `cancel_reason` is kept as sent, an unknown session `transaction` is reported
+  as `"unknown"` (`TransactionState` gains it), and a result `kind` the client didn't ask for is a
+  `client_protocol_error` instead of being read as an update count.
+- A submit or execute answered with an error response for a statement that failed or was
+  cancelled (spec 1.0.0: `execution_error` is 422, `statement_cancelled` and `statement_timeout`
+  are 409 with `cancel_reason`) carries `statementId` (from `Warp-Statement-Id`) and
+  `cancelReason`, and the statement is deleted on the server as any finished one is.
+- A split result's partitions, on this server or others, are all opened at once (§6.10). Partitions
+  on other servers used to be read one after another, and partition 0 was opened before the rest.
+- `Warp-Query-Tag` is sent as ASCII JSON, every other character as a `\u` escape (§2.5), and a
+  tag over 4,096 bytes is refused (`client_invalid_argument`) before anything is sent.
 - The README points Hardcharger users to `@gizmodata/hardcharger` (gizmodata/hardcharger-js), the
   `hardcharger://` client built on this package, instead of saying such a wrapper is planned.
 
 ### Fixed
 
+- A streamed result split into several partitions without `Warp-Result-Order` (or with an unknown
+  one) was read as `any`; it is a `client_protocol_error` (§6.10). So is a statement document with
+  several partitions and no (or an unknown) `partition_order`, which was read partition after
+  partition.
 - An explicit port 443 was dropped from a plain-HTTP URL: `warp://host:443?tls=false` and
   `http://host:443` dialled port 80, and a wrapper's scheme with a default port of its own
   (`hardcharger://host:443`) dialled that default instead of 443. The URL is parsed as https,

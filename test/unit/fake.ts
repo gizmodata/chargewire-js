@@ -36,7 +36,7 @@ export const arrow = (table: Table, headers: Record<string, string> = {}): Respo
 export class FakeServer {
   readonly requests: FakeRequest[] = [];
   readonly routes: Array<{ method: string; pattern: RegExp; handler: Handler }> = [];
-  capabilities = ["prepared_statements", "transactions", "ingest", "result_retention", "long_poll"];
+  capabilities = ["prepared_statements", "transactions", "ingest", "long_poll"];
   tokens = 0;
   expiresIn: number | undefined = 3600;
   validTokens = new Set<string>();

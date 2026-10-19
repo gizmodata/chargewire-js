@@ -12,6 +12,7 @@ import type { Core } from "./core.js";
 import { protocolError } from "./errors.js";
 import { decodeJSON, mediaTypeArrow } from "./http.js";
 import { ScannedBody, incompleteStream, schemaFromIpc } from "./ipc.js";
+import type { ServerInfo } from "./protocol.js";
 import { sessionPath } from "./session.js";
 
 export interface MetadataCallOptions {
@@ -159,8 +160,12 @@ export class Metadata {
     );
   }
 
-  /** The server-info document: Flight SQL's SqlInfo names in lower case (`server_name`, …). */
-  async serverInfo(options: MetadataCallOptions = {}): Promise<Record<string, unknown>> {
+  /**
+   * The server-info document (§10): Flight SQL's `SqlInfo` names without `FLIGHT_SQL_`, in
+   * lower case (`server_name`, `server_read_only`, …), plus the server's own prefixed keys
+   * (`duckdb_version`). A missing key means unknown, not false.
+   */
+  async serverInfo(options: MetadataCallOptions = {}): Promise<ServerInfo> {
     const core = this.#core;
     core.checkOpen();
     await core.settle();
@@ -170,7 +175,11 @@ export class Metadata {
       idempotent: true,
       signal: options.signal,
     }));
-    return decodeJSON<Record<string, unknown>>(resp);
+    const info = await decodeJSON<ServerInfo>(resp);
+    if (info === null || typeof info !== "object" || Array.isArray(info)) {
+      throw protocolError("the server-info answer is not a JSON object");
+    }
+    return info;
   }
 
   /**

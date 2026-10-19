@@ -49,13 +49,13 @@ describe("resumable downloads", () => {
     let rows = 0;
     const err = await expectCode(async () => {
       for await (const batch of conn.stream(bigQuery)) rows += batch.numRows;
-    }, ErrorCode.incompleteStream);
+    }, ErrorCode.clientIncompleteStream);
     expect(err.message).toContain("did not retain the result");
     expect(err.message).toContain("retainResult: true");
     expect(rows).toBeLessThan(1_000_000);
     // query() too: it throws rather than return the rows that arrived.
     proxy.add({ match: isSubmitOf("range(1000000)"), cutAfter: 300_000, times: 1 });
-    await expectCode(conn.query(bigQuery), ErrorCode.incompleteStream);
+    await expectCode(conn.query(bigQuery), ErrorCode.clientIncompleteStream);
     // Its positive twin: the same query through the same proxy, uncut, is whole.
     expectBig(await conn.query(bigQuery));
   });
@@ -67,6 +67,7 @@ describe("resumable downloads", () => {
       ErrorCode.executionError,
     );
     expect(err.message).toContain("boom");
+    expect(err.status).not.toBe(500); // a statement's own failure is never a 5xx (§11)
     expect(
       (await conn.query("SELECT CASE WHEN i < 300000 THEN i ELSE 0 END AS v FROM range(1000000) t(i)")).numRows,
     ).toBe(1_000_000);
@@ -131,7 +132,16 @@ describe("idempotent retries", () => {
     const conn = await open({ queryTag: { job: "nightly" } }, proxy.info);
     await scalar(conn, "SELECT 1");
     expect(proxy.requests(isPost("/statements"))[0]!.headers["warp-query-tag"]).toBe('{"job":"nightly"}');
-    await expectCode(open({ queryTag: "not json" as unknown as Record<string, unknown> }), ErrorCode.invalidArgument);
+    // Non-ASCII travels as \u escapes (§2.5), which the server accepts.
+    const tagged = await conn.query("SELECT 2 AS v", undefined, { queryTag: { job: "nächtlich 🚀" } });
+    expect(Number(tagged.getChildAt(0)!.get(0))).toBe(2);
+    expect(proxy.requests(isPost("/statements"))[1]!.headers["warp-query-tag"]).toBe(
+      '{"job":"n\\u00e4chtlich \\ud83d\\ude80"}',
+    );
+    await expectCode(
+      open({ queryTag: "not json" as unknown as Record<string, unknown> }),
+      ErrorCode.clientInvalidArgument,
+    );
   });
 });
 

@@ -12,6 +12,7 @@ import {
   decodeJSON,
   jsonBody,
   newIdempotencyKey,
+  stringifyJSON,
 } from "./http.js";
 import { type ArrowInput, arrowBody, decodeSchema } from "./ipc.js";
 import { Metadata } from "./metadata.js";
@@ -30,6 +31,7 @@ import { Session, sessionPath } from "./session.js";
 import { Execution, type PreparedRef, maxResultPartitions, runRows, runUpdate } from "./statement.js";
 import { ResultStream } from "./stream.js";
 import { type SchemeMap, defaultSchemes, parseUrl } from "./url.js";
+import { version } from "./version.js";
 import { enableZstd } from "./zstd.js";
 
 /** How a statement runs. Set on `connect` as defaults, or per call. */
@@ -44,7 +46,11 @@ export interface StatementOptions {
   retainResult?: boolean;
   /** Milliseconds before the server cancels the statement (§6.9). */
   statementTimeoutMs?: number;
-  /** A JSON object recorded with the statement, for observability (Warp-Query-Tag). */
+  /**
+   * A JSON object the server may record with the statement, for observability
+   * (`Warp-Query-Tag`, §2.5). Sent as ASCII JSON (other characters as `\u` escapes), at
+   * most 4,096 bytes; a larger tag is refused before anything is sent.
+   */
   queryTag?: Record<string, unknown>;
   /** `zstd` accepts ZSTD-compressed Arrow buffers in results, if the server offers them (§8.2). Default `none`. */
   ipcCompression?: "none" | "zstd";
@@ -123,7 +129,7 @@ export interface ConnectOptions extends StatementOptions {
   resultBufferBytes?: number;
   /** Diagnostics; `warn` defaults to console.warn (session replacements are reported there). */
   logger?: Logger;
-  /** The User-Agent header (Node, Deno, Bun; browsers set their own). */
+  /** The User-Agent header (Node, Deno, Bun; browsers set their own). Default `warp-sql-js/<version>` there. */
   userAgent?: string;
   /** URL schemes accepted, for wrappers that add their own (see `defaultSchemes`). */
   schemes?: SchemeMap;
@@ -202,7 +208,7 @@ export async function connect(options: ConnectOptions): Promise<Connection> {
     fetch: fetchFn,
     credentials,
     maxAttempts: options.maxAttempts ?? 4,
-    userAgent: options.userAgent,
+    userAgent: options.userAgent ?? (platform.name === "node" ? `warp-sql-js/${version}` : undefined),
     logger,
     fetchCredentials:
       options.fetchCredentials ??
@@ -345,7 +351,7 @@ async function discover(http: HttpClient, signal: AbortSignal | undefined): Prom
   try {
     doc = await http.json<DiscoveryDocument>({ method: "GET", path: "", idempotent: true, anonymous: true, signal });
   } catch (err) {
-    if (WarpSqlError.is(err, ErrorCode.protocolError, ErrorCode.notFound)) {
+    if (WarpSqlError.is(err, ErrorCode.clientProtocolError, ErrorCode.clientHttpError, ErrorCode.notFound)) {
       throw protocolError(`${http.base.href} does not describe a Warp SQL server: ${(err as Error).message}`, err);
     }
     throw err;
@@ -386,12 +392,7 @@ function resolveSettings(defaults: StatementSettings, options: StatementOptions)
     }
     s.statementTimeoutMs = options.statementTimeoutMs;
   }
-  if (options.queryTag !== undefined) {
-    if (options.queryTag === null || typeof options.queryTag !== "object" || Array.isArray(options.queryTag)) {
-      throw invalidArgument("queryTag must be a JSON object");
-    }
-    s.queryTag = JSON.stringify(options.queryTag);
-  }
+  if (options.queryTag !== undefined) s.queryTag = queryTagHeader(options.queryTag);
   if (options.ipcCompression !== undefined) {
     if (options.ipcCompression !== "none" && options.ipcCompression !== "zstd") {
       throw invalidArgument(`ipcCompression must be "none" or "zstd", not ${JSON.stringify(options.ipcCompression)}`);
@@ -563,12 +564,12 @@ export class Connection {
     }
     await this.#before();
     core.require(Capability.ingest, "bulk ingest");
-    // Partitioned ingest (spec §8.3, still on warp-sql's feature/ingest-partitions branch)
-    // slots in here once it lands on main, as the Go and JDBC drivers do it: on a server
-    // listing `partitioned_ingest`, an upload of two batches or more opens an ingest
-    // (POST …/ingests), sends its batches as up to `parts` part uploads at once (each with
-    // its own Idempotency-Key), and commits with the part count; any failed part aborts
-    // the ingest (DELETE), so nothing is written. Otherwise, the single upload below.
+    // Partitioned ingest (spec §8.3) is not implemented here yet. It would slot in here, as
+    // the Go and JDBC drivers do it: on a server listing `partitioned_ingest`, an upload of
+    // two batches or more opens an ingest (POST …/ingests), sends its batches as part
+    // uploads at once (each with its own Idempotency-Key), and commits with
+    // `{"part_count": n}`; any failed part aborts the ingest (DELETE), so nothing is
+    // written. Until then, every upload is the single request below (§8.1).
     const body = await arrowBody(data, { streaming: core.platform.streamingUploads });
     const query = {
       table: tableName,
@@ -669,6 +670,35 @@ export class Connection {
   async [Symbol.asyncDispose](): Promise<void> {
     await this.close();
   }
+}
+
+/** The most bytes a `Warp-Query-Tag` may have (§2.5). */
+export const maxQueryTagBytes = 4096;
+
+/**
+ * Serializes a query tag for `Warp-Query-Tag` (§2.5): a JSON object, in ASCII (every other
+ * character as a `\u` escape, so a header can carry it), at most 4,096 bytes.
+ */
+export function queryTagHeader(tag: unknown): string {
+  if (tag === null || typeof tag !== "object" || Array.isArray(tag)) {
+    throw invalidArgument("queryTag must be a JSON object");
+  }
+  let text: string;
+  try {
+    text = stringifyJSON(tag);
+  } catch (err) {
+    throw invalidArgument(`queryTag cannot be written as JSON: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  // JSON.stringify leaves non-ASCII characters as they are (and writes lone surrogates as
+  // escapes already); every UTF-16 unit above 0x7E becomes \uXXXX, which JSON reads back as
+  // the same string. Control characters below 0x20 are escaped by JSON.stringify itself.
+  text = text.replace(/[\u007f-\uffff]/g, (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"));
+  if (text.length > maxQueryTagBytes) {
+    throw invalidArgument(
+      `queryTag is ${text.length} bytes as JSON, more than the ${maxQueryTagBytes} a server accepts`,
+    );
+  }
+  return text;
 }
 
 function checkSql(sql: unknown): void {
@@ -784,7 +814,9 @@ export class PreparedStatement {
         idempotent: true,
       });
     } catch (err) {
-      if (!WarpSqlError.is(err, ErrorCode.preparedNotFound, ErrorCode.sessionNotFound, ErrorCode.connectionClosed))
+      if (
+        !WarpSqlError.is(err, ErrorCode.preparedNotFound, ErrorCode.sessionNotFound, ErrorCode.clientConnectionClosed)
+      )
         throw err;
     }
   }

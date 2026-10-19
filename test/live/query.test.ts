@@ -32,7 +32,7 @@ describe("queries", () => {
     // A base path the server doesn't serve is not a Warp SQL server.
     await expectCode(
       connect({ url: `http://${shared.host}/nope`, username: testUsername, password: shared.password }),
-      ErrorCode.protocolError,
+      ErrorCode.clientProtocolError,
     );
   });
 
@@ -166,9 +166,12 @@ describe("queries", () => {
 
   test("parameters JSON cannot carry are refused before anything is sent", async () => {
     const conn = await open();
-    const err = await expectCode(conn.query("SELECT ?", [new Date() as unknown as string]), ErrorCode.invalidArgument);
+    const err = await expectCode(
+      conn.query("SELECT ?", [new Date() as unknown as string]),
+      ErrorCode.clientInvalidArgument,
+    );
     expect(err.message).toContain("Arrow");
-    await expectCode(conn.query("SELECT ?", [Number.NaN]), ErrorCode.invalidArgument);
+    await expectCode(conn.query("SELECT ?", [Number.NaN]), ErrorCode.clientInvalidArgument);
     // Its positive twin: the same value as a string works.
     expect((await conn.query("SELECT ?::DATE AS d", ["2026-10-17"])).numRows).toBe(1);
   });
@@ -182,6 +185,18 @@ describe("queries", () => {
     expect(err).toBeInstanceOf(WarpSqlError);
     // The connection is fine afterwards.
     expect(await scalar(conn, "SELECT 1")).toBe(1);
+  });
+
+  test("a statement that fails while it runs is execution_error, a 422 (never a 5xx), naming the statement (§6.1, §11)", async () => {
+    for (const options of [{}, { async: true }]) {
+      const conn = await open(options);
+      const err = await expectCode(conn.query("SELECT error('runtime boom') AS v"), ErrorCode.executionError);
+      expect(err.message).toContain("runtime boom");
+      expect(err.status).toBe(422);
+      expect(await scalar(conn, "SELECT 1")).toBe(1);
+      const update = await expectCode(conn.execute("SELECT error('runtime boom')"), ErrorCode.executionError);
+      expect(update.status).toBe(422);
+    }
   });
 
   test("a missing table is sql_error with SQLSTATE 42P01 when the server sends one", async () => {
@@ -224,6 +239,6 @@ describe("queries", () => {
   test("a closed connection refuses work", async () => {
     const conn = await open();
     await conn.close();
-    await expectCode(conn.query("SELECT 1"), ErrorCode.connectionClosed);
+    await expectCode(conn.query("SELECT 1"), ErrorCode.clientConnectionClosed);
   });
 });

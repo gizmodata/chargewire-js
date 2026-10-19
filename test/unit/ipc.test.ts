@@ -65,7 +65,7 @@ describe("IpcScanner (§6.6)", () => {
   test("garbage is a protocol error, not an incomplete stream", () => {
     const scanner = new IpcScanner();
     expect(() => scanner.push(Uint8Array.from([0xff, 0xff, 0xff, 0xff, 8, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8]))).toThrow(
-      expect.objectContaining({ code: ErrorCode.protocolError }),
+      expect.objectContaining({ code: ErrorCode.clientProtocolError }),
     );
   });
 
@@ -84,7 +84,7 @@ describe("IpcScanner (§6.6)", () => {
       for await (const _ of cut) {
         // drain
       }
-    }).rejects.toMatchObject({ code: ErrorCode.incompleteStream });
+    }).rejects.toMatchObject({ code: ErrorCode.clientIncompleteStream });
   });
 });
 
@@ -116,7 +116,7 @@ describe("encoding uploads", () => {
   test("batches of different schemas are refused", async () => {
     const other = tableFromArrays({ b: Float64Array.from([1]) });
     await expect(arrowBody([table.batches[0]!, other.batches[0]!], { streaming: false })).rejects.toMatchObject({
-      code: ErrorCode.invalidArgument,
+      code: ErrorCode.clientInvalidArgument,
     });
     await expect(arrowBody([table.batches[0]!, table.batches[0]!], { streaming: false })).resolves.toHaveProperty(
       "bytes",
@@ -125,8 +125,8 @@ describe("encoding uploads", () => {
 
   test("inputs that are not Arrow are refused", async () => {
     await expect(openInput({} as never)).rejects.toBeInstanceOf(WarpSqlError);
-    await expect(openInput([] as never)).rejects.toMatchObject({ code: ErrorCode.invalidArgument });
-    await expect(openInput([1] as never)).rejects.toMatchObject({ code: ErrorCode.invalidArgument });
+    await expect(openInput([] as never)).rejects.toMatchObject({ code: ErrorCode.clientInvalidArgument });
+    await expect(openInput([1] as never)).rejects.toMatchObject({ code: ErrorCode.clientInvalidArgument });
   });
 });
 
@@ -136,6 +136,6 @@ describe("schemas in JSON (§2.2)", () => {
     const base64 = btoa(String.fromCharCode(...bytes));
     expect(decodeSchema(base64)!.fields.map((f) => f.name)).toEqual(["a", "s"]);
     expect(decodeSchema(null)).toBeUndefined();
-    expect(() => decodeSchema("not base64!")).toThrow(expect.objectContaining({ code: ErrorCode.protocolError }));
+    expect(() => decodeSchema("not base64!")).toThrow(expect.objectContaining({ code: ErrorCode.clientProtocolError }));
   });
 });

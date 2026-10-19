@@ -1,6 +1,6 @@
 // Licensed under the Apache License, Version 2.0.
 
-import { ErrorCode, WarpSqlError, protocolError, responseError } from "./errors.js";
+import { ErrorCode, WarpSqlError, protocolError, responseError, tokenRenewable } from "./errors.js";
 import { endpoint, redact } from "./url.js";
 
 export const mediaTypeJSON = "application/json";
@@ -130,6 +130,11 @@ export class HttpClient {
     if (config.credentials.kind === "static") this.#token = config.credentials.token;
   }
 
+  /** The token requests carry now (undefined before the first sign-in). */
+  get currentToken(): string | undefined {
+    return this.#token;
+  }
+
   /** Whether a refused token can be replaced. */
   get canRenew(): boolean {
     return this.#credentials.kind !== "static";
@@ -139,8 +144,11 @@ export class HttpClient {
    * Sends a request and returns its 2xx answer. An error answer becomes a WarpSqlError.
    *
    * Transport failures and 421/429/502/503/504 answers to idempotent requests are sent
-   * again (honouring Retry-After), with backoff. A request refused for an expired token
-   * is sent once more with a fresh token: the server refused it before running it.
+   * again (honouring Retry-After), with backoff. A request refused with `invalid_token` is
+   * sent once more with a fresh token (the server refused it before running it), unless
+   * the refusal's reason says signing in again cannot help or must not happen on its own
+   * (`token_revoked`, `credentials_changed`, `principal_dropped`, §4.2): that refusal is
+   * the error, with its reason.
    */
   async request(req: HttpRequest): Promise<Response> {
     let backoff = 200;
@@ -169,6 +177,7 @@ export class HttpClient {
       const problem = await responseError(resp);
       if (
         problem.code === ErrorCode.invalidToken &&
+        tokenRenewable(problem.reason) &&
         !renewed &&
         !req.anonymous &&
         this.canRenew &&
@@ -321,6 +330,22 @@ function permanentTransportError(err: unknown): boolean {
   return false;
 }
 
+/**
+ * The TLS alert a server refused the handshake with, when it is one of §4.4's: with TLS 1.3
+ * a refused client certificate reaches the client as an alert on its first read, and stands
+ * for the refusal, not for a server the client could not reach.
+ */
+function certificateAlert(err: unknown): string | undefined {
+  for (let e: unknown = err, depth = 0; e !== undefined && e !== null && depth < 5; depth++) {
+    const code = (e as { code?: unknown }).code;
+    const text = `${typeof code === "string" ? code : ""} ${e instanceof Error ? e.message : ""}`.toUpperCase();
+    if (/ALERT[_ ]CERTIFICATE[_ ]REQUIRED/.test(text)) return ErrorCode.certificateRequired;
+    if (/ALERT[_ ]CERTIFICATE[_ ]REVOKED/.test(text)) return ErrorCode.certificateRevoked;
+    e = (e as { cause?: unknown }).cause;
+  }
+  return undefined;
+}
+
 function transportError(req: HttpRequest, err: unknown): WarpSqlError {
   const base = req.baseUrl ?? undefined;
   let reason = err instanceof Error ? err.message : String(err);
@@ -328,9 +353,12 @@ function transportError(req: HttpRequest, err: unknown): WarpSqlError {
   if (cause instanceof Error && cause.message && !reason.includes(cause.message)) reason += `: ${cause.message}`;
   const code = (cause as { code?: unknown } | undefined)?.code;
   if (typeof code === "string" && !reason.includes(code)) reason += ` (${code})`;
+  const alert = certificateAlert(err);
   return new WarpSqlError({
-    code: ErrorCode.transportError,
-    message: `${req.method} ${req.path}${base ? ` on ${redact(base.href)}` : ""}: ${reason}`,
+    code: alert ?? ErrorCode.clientTransportError,
+    message:
+      `${req.method} ${req.path}${base ? ` on ${redact(base.href)}` : ""}: ` +
+      (alert !== undefined ? `the server refused the TLS client certificate (${reason})` : reason),
     cause: err,
   });
 }
@@ -358,7 +386,7 @@ export async function decodeJSON<T>(resp: Response, req?: HttpRequest): Promise<
   } catch (err) {
     if (req?.signal?.aborted) throw abortError(req.signal);
     throw new WarpSqlError({
-      code: ErrorCode.transportError,
+      code: ErrorCode.clientTransportError,
       message: `reading the answer to ${req?.method ?? ""} ${req?.path ?? ""}`,
       cause: err,
     });

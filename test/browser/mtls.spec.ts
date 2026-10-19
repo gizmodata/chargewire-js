@@ -62,5 +62,5 @@ test("a page on an allowed origin signs in with the browser's client certificate
 test("a page on another origin cannot", async ({ page }, info) => {
   await page.goto(`http://127.0.0.1:${examplePort}/`); // not on the server's allow-list
   const result = await signIn(page, serverUrl(info.project.name));
-  expect(result.code).toBe("transport_error"); // the browser blocks the answer (CORS)
+  expect(result.code).toBe("client_transport_error"); // the browser blocks the answer (CORS)
 });

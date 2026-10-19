@@ -69,7 +69,7 @@ describe("client certificate sign-in (§4.4)", () => {
       { username: "joe" },
     ]) {
       const server = certificateServer();
-      const err = await expectCode(openCertificate(server, extra), ErrorCode.invalidArgument);
+      const err = await expectCode(openCertificate(server, extra), ErrorCode.clientInvalidArgument);
       expect(err.message).toContain("signs in with the client certificate alone");
       expect(server.requests).toEqual([]);
     }
@@ -79,7 +79,7 @@ describe("client certificate sign-in (§4.4)", () => {
     const server = certificateServer();
     const err = await expectCode(
       openCertificate(server, { url: "warp://db.test:31337?tls=false" }),
-      ErrorCode.invalidArgument,
+      ErrorCode.clientInvalidArgument,
     );
     expect(err.message).toContain("needs TLS");
     expect(server.requests).toEqual([]);
@@ -88,12 +88,12 @@ describe("client certificate sign-in (§4.4)", () => {
   test("in Node it needs tls.cert and tls.key, and they go together", async () => {
     const err = await expectCode(
       connect({ url: "warp://db.test:31337", authType: "client_certificate", logger: quiet }),
-      ErrorCode.invalidArgument,
+      ErrorCode.clientInvalidArgument,
     );
     expect(err.message).toContain("set tls.cert and tls.key");
     const half = await expectCode(
       connect({ url: "warp://db.test:31337", authType: "client_certificate", tls: { cert: "x" }, logger: quiet }),
-      ErrorCode.invalidArgument,
+      ErrorCode.clientInvalidArgument,
     );
     expect(half.message).toContain("tls.cert and tls.key go together");
   });
@@ -101,7 +101,7 @@ describe("client certificate sign-in (§4.4)", () => {
   test("an unknown authType is refused", async () => {
     const err = await expectCode(
       connect({ url: "warp://db.test:31337", authType: "kerberos" as never, logger: quiet }),
-      ErrorCode.invalidArgument,
+      ErrorCode.clientInvalidArgument,
     );
     expect(err.message).toContain('"password", "client_certificate" or "oauth_browser"');
   });
@@ -121,7 +121,7 @@ describe("client certificate sign-in (§4.4)", () => {
 
   test("the certificate refusals keep their codes, and are not answered with a new token", async () => {
     for (const code of [
-      ErrorCode.clientCertificateRequired,
+      ErrorCode.certificateRequired,
       ErrorCode.unknownCertificateIdentity,
       ErrorCode.certificateRevoked,
       ErrorCode.certificateMismatch,

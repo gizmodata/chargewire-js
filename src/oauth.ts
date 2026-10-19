@@ -27,7 +27,10 @@ export interface BrowserSignInFlow {
   expiresAt: string;
 }
 
-/** A poll's answer: still waiting, or the token (handed out once). A failed sign-in throws. */
+/**
+ * A poll's answer: still waiting, or the token (handed out once). A failed sign-in throws.
+ * A state a later version adds is never terminal (§12), so it reads as `pending`.
+ */
 export type BrowserSignInPoll =
   { state: "pending" } | { state: "complete"; accessToken: string; expiresIn: number | undefined };
 
@@ -127,8 +130,10 @@ export async function startBrowserSignIn(
 
 /**
  * Polls a flow once (§4.3.2). A failed sign-in throws a WarpSqlError whose code is the
- * flow's (`access_denied`, `invalid_credentials`, `identity_provider_error`); a flow that
- * expired, was already collected or is given the wrong secret is `flow_not_found`.
+ * flow's `error.code` (`access_denied`, `invalid_credentials`, `identity_provider_error`, or
+ * one a later version adds, kept as sent: a generic failure, §12), with no `status`: the
+ * poll itself succeeded. A flow that expired, was already collected or is given the wrong
+ * secret is `flow_not_found`. A state the client doesn't know is not terminal: `pending`.
  */
 export async function pollBrowserSignIn(
   options: BrowserSignInTarget & { flow: Pick<BrowserSignInFlow, "flowId" | "pollSecret"> },
@@ -164,24 +169,24 @@ export async function pollBrowserSignIn(
     }
     case "failed": {
       const error = (answer["error"] ?? {}) as { code?: unknown; detail?: unknown };
-      const code = typeof error.code === "string" && error.code !== "" ? error.code : ErrorCode.invalidCredentials;
       const detail = typeof error.detail === "string" ? error.detail : undefined;
-      throw new WarpSqlError({
-        code,
-        status: 401,
-        detail,
-        message: `browser sign-in failed: ${detail || code} (${code})`,
-      });
+      if (typeof error.code !== "string" || error.code === "") {
+        throw protocolError(`the browser sign-in failed without an error code${detail ? `: ${detail}` : ""}`);
+      }
+      const code = error.code;
+      throw new WarpSqlError({ code, detail, message: `browser sign-in failed: ${detail || code} (${code})` });
     }
   }
-  throw protocolError(`unexpected browser sign-in state ${JSON.stringify(answer["state"])}`);
+  if (typeof answer["state"] !== "string") throw protocolError("the browser sign-in poll answer has no state");
+  // A state a later version adds is not terminal (§12): keep polling.
+  return { state: "pending" };
 }
 
 /**
  * The whole browser sign-in, for clients outside a browser page (Node tools, desktop
  * apps): creates a flow, hands its authorize URL to `openUrl` (open a browser, or show the
  * URL), and polls at the server's interval until the person has signed in, for at most
- * `timeoutMs` (default 5 minutes; `statement_timeout` after it).
+ * `timeoutMs` (default 5 minutes; `client_sign_in_timeout` after it).
  */
 export async function browserSignIn(
   options: BrowserSignInTarget & { openUrl: (url: string) => void | Promise<void>; timeoutMs?: number },
@@ -199,7 +204,7 @@ export async function browserSignIn(
     if (poll.state === "complete") return { accessToken: poll.accessToken, expiresIn: poll.expiresIn };
     if (Date.now() >= deadline) {
       throw new WarpSqlError({
-        code: ErrorCode.statementTimeout,
+        code: ErrorCode.clientSignInTimeout,
         message: `the browser sign-in was not completed within ${Math.round(timeoutMs / 1000)} s`,
       });
     }
@@ -302,7 +307,7 @@ export async function completeBrowserRedirectSignIn(
     const poll = await pollBrowserSignIn({ ...options, flow: { flowId: taken.flowId, pollSecret } });
     if (poll.state === "complete") return { accessToken: poll.accessToken, expiresIn: poll.expiresIn };
     if (attempt >= 30) {
-      throw new WarpSqlError({ code: ErrorCode.statementTimeout, message: "the browser sign-in did not complete" });
+      throw new WarpSqlError({ code: ErrorCode.clientSignInTimeout, message: "the browser sign-in did not complete" });
     }
     await sleep(1000, options.signal);
   }
