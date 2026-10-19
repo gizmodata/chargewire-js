@@ -6,7 +6,22 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Added
+
+- LZ4_FRAME result compression (spec §8.2): `ipcCompression: "lz4_frame"`, read by a dependency-free
+  LZ4 frame decoder in this package that is loaded only when a connection uses it (3.7 KiB
+  minified). It decodes Arrow's LZ4 buffers at 850 to 900 MB/s in Node, against about 240 MB/s for
+  zstd through fzstd.
+- `ipcCompression: "auto"`: `lz4_frame` when the discovery request's round trip is under 10 ms, else
+  `zstd`, the Go ADBC driver's rule. A first discovery that looks slow is timed again on the open
+  connection, so connection setup does not count as distance.
+
 ### Changed
+
+- `ipcCompression` takes `"none"`, `"lz4_frame"`, `"zstd"` or `"auto"`, and a codec is used only
+  when the server lists its capability (`ipc_compression_lz4_frame`, `ipc_compression_zstd`). The
+  chosen codec is sent in `Warp-IPC-Compression` on every request that returns Arrow: the submit,
+  each partition's result request, and catalog metadata requests (these had no header).
 
 - The README points Hardcharger users to `@gizmodata/hardcharger` (gizmodata/hardcharger-js), the
   `hardcharger://` client built on this package, instead of saying such a wrapper is planned.

@@ -9,6 +9,7 @@ export const Capability = {
   ingest: "ingest",
   resultRetention: "result_retention",
   longPoll: "long_poll",
+  ipcCompressionLz4Frame: "ipc_compression_lz4_frame",
   ipcCompressionZstd: "ipc_compression_zstd",
   partitionedResults: "partitioned_results",
   resultPartitions: "result_partitions",

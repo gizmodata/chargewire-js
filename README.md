@@ -268,7 +268,7 @@ Statement options, per call or as `connect` defaults:
 | `queryTag`           |                        | A JSON object recorded with the statement                                                |
 | `resultPartitions`   | 8 (Node), 4 (browsers) | Read up to this many partitions of a result at once (§6.10); `1`: one stream             |
 | `resultOrder`        | `preserve`             | `any` lets a split result come back in any row order                                     |
-| `ipcCompression`     | `none`                 | `zstd`: accept ZSTD-compressed Arrow buffers in results (§8.2)                           |
+| `ipcCompression`     | `none`                 | `lz4_frame`, `zstd` or `auto`: compressed Arrow buffers in results (§8.2, below)         |
 
 ## 🧠 How it behaves
 
@@ -310,7 +310,8 @@ Statement options, per call or as `connect` defaults:
 - **Partitioned uploads** (spec §8.3, one ingest over several connections) are designed for and
   come once the section lands on warp-sql's main branch; until then `ingest` sends one stream.
 - **Capabilities.** Nothing the server's discovery document does not list is used: prepared
-  statements, ingest, transactions, partitions and zstd fail with `not_implemented` or stay off.
+  statements, ingest, transactions, partitions and compression fail with `not_implemented` or stay
+  off.
 
 ## ⚠️ Errors
 
@@ -335,15 +336,41 @@ try {
 | `result_buffer_exceeded` | A stream set aside for another request did not fit `resultBufferBytes`          |
 | `connection_closed`      | The connection was closed                                                       |
 
-## 🗜️ zstd
+## 🗜️ Compression
 
-Arrow JS has no zstd codec of its own, but it reads compressed IPC buffers through a codec
-registry. With `ipcCompression: "zstd"` the client registers [fzstd](https://github.com/101arrowz/fzstd)
-(pure JavaScript, loaded only then) and the server may compress result buffers. Arrow JS 21 hands a
-codec's output straight to typed-array views, which need 8-byte alignment, and fzstd returns views at
-any offset, so the client copies misaligned output. Uploads are never compressed: there is no pure
-JavaScript zstd encoder worth shipping, and the spec lets clients send uncompressed Arrow. It is off
-by default, as in the Go and JDBC drivers.
+With `ipcCompression` the server may compress result buffers with Arrow's own IPC compression
+(§8.2). The client sends the chosen codec in `Warp-IPC-Compression` on every request that returns
+Arrow, each partition's included, and uses a codec only when the server lists its capability
+(`ipc_compression_lz4_frame`, `ipc_compression_zstd`); otherwise results come uncompressed.
+
+| Value       | Codec                                                                                        |
+| ----------- | -------------------------------------------------------------------------------------------- |
+| `none`      | The default: decoding runs on the thread that reads the result, a browser's main thread too  |
+| `lz4_frame` | Arrow's LZ4_FRAME: a fraction of zstd's CPU, larger. For fast links                          |
+| `zstd`      | Arrow's ZSTD: smaller, slower to decode. For links where bandwidth is scarcer than CPU       |
+| `auto`      | `lz4_frame` when the discovery request's round trip is under 10 ms, else `zstd` (as Go ADBC) |
+
+`auto` times `GET /warp` to its response headers. That first request also opens the connection
+(TCP and TLS handshakes), so when it takes 10 ms or more, the client times one more discovery request
+on the open connection and keeps the shorter time.
+
+Arrow JS reads compressed IPC buffers through a codec registry but ships no codecs. The client
+registers its own, each loaded only when a connection uses it (a codec the application registered
+already is kept):
+
+- **LZ4_FRAME**: a dependency-free LZ4 frame decoder in this package (3.7 KiB minified). It reads
+  linked and independent blocks of any size, stored blocks, content size, and concatenated and
+  skippable frames, and verifies the header, block and content checksums when a frame has them
+  (Arrow C++ writes none).
+- **ZSTD**: [fzstd](https://github.com/101arrowz/fzstd), pure JavaScript. Arrow JS 21 hands a codec's
+  output straight to typed-array views, which need 8-byte alignment, and fzstd returns views at any
+  offset, so the client copies misaligned output.
+
+Buffers a server leaves uncompressed inside a compressed stream (uncompressed length `-1`) are read
+as they are. Decoding a TPC-H SF1 `lineitem` result (1.04 GB of Arrow data) in Node 26 on an
+Apple M5 Max: uncompressed, no work (Arrow JS reads the buffers in place); `lz4_frame` (410 MB),
+850 to 900 MB/s of Arrow data; `zstd` (246 MB), about 240 MB/s. Uploads are never compressed: the
+spec lets clients send uncompressed Arrow.
 
 ## 🛠️ Building and testing
 

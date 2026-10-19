@@ -54,6 +54,17 @@ test("the client streams, splits, uploads and cancels in the browser", async ({ 
         rows += batch.numRows;
       }
       const partitions = await stream.partitions();
+      // Compressed results, each codec's decoder loaded on use, where the server offers it.
+      const compressed: Record<string, string> = {};
+      for (const codec of ["lz4_frame", "zstd"] as const) {
+        if (!conn.capabilities.has(`ipc_compression_${codec}`)) continue;
+        const t = await conn.query(
+          "SELECT i, hash(i)::DOUBLE AS h, 'v' || i AS s FROM range(300000) t(i) ORDER BY i",
+          undefined,
+          { ipcCompression: codec },
+        );
+        compressed[codec] = `${t.numRows} ${String(t.getChild("s")!.get(299999))}`;
+      }
       // An upload from the browser: held in memory (browsers cannot stream request bodies over HTTP/1.1).
       const ingested = await conn.ingest(
         "browser_t",
@@ -89,6 +100,7 @@ test("the client streams, splits, uploads and cancels in the browser", async ({ 
         cancelCode,
         after,
         wrongPassword,
+        compressed,
         splits: conn.capabilities.has("result_partitions"),
       };
     },
@@ -102,4 +114,5 @@ test("the client streams, splits, uploads and cancels in the browser", async ({ 
   expect(result.cancelCode).toBe("statement_cancelled");
   expect(result.after).toBe(42);
   expect(result.wrongPassword).toBe("invalid_credentials");
+  expect(result.compressed).toEqual({ lz4_frame: "300000 v299999", zstd: "300000 v299999" });
 });

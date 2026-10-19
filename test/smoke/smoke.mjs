@@ -29,6 +29,13 @@ check(
 const insert = await conn.prepare("INSERT INTO smoke_t VALUES (?)");
 check((await insert.executeBatch([[4], [5]])) === 2, "prepared");
 check((await conn.metadata.tables({ tableNameFilterPattern: "smoke_t" })).numRows === 1, "metadata");
+// Each codec's decoder is a lazily loaded module: load it in this runtime, where offered.
+const compressedSql = "SELECT i, hash(i)::DOUBLE AS h, 'v' || i AS s FROM range(300000) t(i) ORDER BY i";
+for (const codec of ["lz4_frame", "zstd"]) {
+  if (!conn.capabilities.has(`ipc_compression_${codec}`)) continue;
+  const t = await conn.query(compressedSql, undefined, { ipcCompression: codec });
+  check(t.numRows === 300000 && t.get(299999).i === 299999n && t.get(299999).s === "v299999", codec);
+}
 let code = "";
 try {
   await conn.query("SELEC 1");

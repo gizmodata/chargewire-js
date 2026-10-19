@@ -1,7 +1,8 @@
 // Licensed under the Apache License, Version 2.0.
 
+import { type IpcCodec, type IpcCompression, chooseCodec, enableCodec, farLinkMs } from "./compression.js";
 import { ErrorCode, WarpSqlError } from "./errors.js";
-import type { HttpClient, Logger } from "./http.js";
+import { type HttpClient, type Logger, discard } from "./http.js";
 import type { Platform } from "./platform/types.js";
 import type { DiscoveryDocument } from "./protocol.js";
 import type { Session } from "./session.js";
@@ -16,8 +17,10 @@ export interface StatementSettings {
   statementTimeoutMs: number | undefined;
   /** JSON object recorded with the statement (Warp-Query-Tag), already serialized. */
   queryTag: string | undefined;
-  /** Accept ZSTD-compressed Arrow buffers (§8.2). */
-  zstd: boolean;
+  /** The Arrow buffer compression asked for (`ipcCompression`). */
+  ipcCompression: IpcCompression;
+  /** The codec results are asked in (Warp-IPC-Compression, §8.2), chosen from `ipcCompression` once the server is known; undefined: none. */
+  ipcCodec: IpcCodec | undefined;
   /** Read up to this many partitions of a result at once (§6.10); 1: one stream. */
   resultPartitions: number;
   /** `any` lets a split result come back in any row order. */
@@ -51,6 +54,7 @@ export class Core {
     platform: Platform;
     settings: StatementSettings;
     resultBufferBytes: number;
+    discoveryRttMs: number;
   }) {
     this.http = init.http;
     this.session = init.session;
@@ -60,6 +64,46 @@ export class Core {
     this.settings = init.settings;
     this.resultBufferBytes = init.resultBufferBytes;
     this.logger = init.http.logger;
+    this.#discoveryRttMs = init.discoveryRttMs;
+  }
+
+  readonly #discoveryRttMs: number;
+  #linkRtt: Promise<number> | undefined;
+
+  /**
+   * About one network round trip to the server, for `auto` compression: the time the
+   * discovery request took to answer. That time includes opening the connection (TCP and
+   * TLS handshakes, a round trip or more each), so when it looks like a far link, one
+   * more discovery request on the open connection is timed and the shorter one counts.
+   */
+  linkRttMs(): Promise<number> {
+    this.#linkRtt ??= (async () => {
+      const first = this.#discoveryRttMs;
+      if (first < farLinkMs) return first;
+      try {
+        const start = performance.now();
+        const resp = await this.http.request({
+          method: "GET",
+          path: "",
+          idempotent: true,
+          anonymous: true,
+          signal: AbortSignal.timeout(5_000),
+        });
+        const rtt = performance.now() - start;
+        await discard(resp);
+        return Math.min(first, rtt);
+      } catch {
+        return first;
+      }
+    })();
+    return this.#linkRtt;
+  }
+
+  /** Chooses the codec for `settings` (§8.2) and loads its decoder. */
+  async resolveCodec(settings: StatementSettings): Promise<void> {
+    const rtt = settings.ipcCompression === "auto" ? await this.linkRttMs() : 0;
+    settings.ipcCodec = chooseCodec(settings.ipcCompression, (c) => this.has(c), rtt);
+    if (settings.ipcCodec !== undefined) await enableCodec(settings.ipcCodec);
   }
 
   has(capability: string): boolean {

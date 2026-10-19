@@ -108,6 +108,10 @@ export interface RecordedRequest {
   headers: Record<string, string | string[] | undefined>;
   /** The first 64 KiB of the request body, as text. */
   body: string;
+  /** The answer's headers, once it has arrived. */
+  answerHeaders?: Record<string, string | string[] | undefined>;
+  /** The answer's body as it reached the client, when the proxy keeps answers. */
+  answer?: Buffer[];
 }
 
 export interface FaultRule {
@@ -125,6 +129,8 @@ export class FaultProxy {
   readonly seen: RecordedRequest[] = [];
   /** TCP connections the client opened to the proxy. */
   connections = 0;
+  /** Keep every answer's body in `answer` (for small results). */
+  keepAnswers = false;
   readonly #rules: FaultRule[] = [];
   readonly #server = createServer((req, res) => this.#handle(req, res));
   readonly #target: ServerInfo;
@@ -190,6 +196,8 @@ export class FaultProxy {
         headers: { ...req.headers, host: this.#target.host },
       },
       (answer) => {
+        recorded.answerHeaders = { ...answer.headers };
+        if (this.keepAnswers) recorded.answer = [];
         const rule = this.#take(recorded);
         if (rule !== undefined && rule.cutAfter === 0) {
           // A lost answer: the server did the work, the client hears nothing.
@@ -209,6 +217,7 @@ export class FaultProxy {
             return;
           }
           left -= chunk.byteLength;
+          recorded.answer?.push(chunk);
           if (!res.write(chunk)) {
             answer.pause();
             res.once("drain", () => answer.resume());

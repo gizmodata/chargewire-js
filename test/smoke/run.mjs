@@ -87,7 +87,8 @@ async function runWorker() {
       result.rows !== 500000 ||
       result.first !== 499999 ||
       result.streamed !== 300000 ||
-      result.code !== "sql_error"
+      result.code !== "sql_error" ||
+      (result.lz4 !== "v299999" && result.lz4 !== "not offered")
     ) {
       throw new Error(`unexpected answer: ${text}`);
     }
