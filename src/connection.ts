@@ -15,6 +15,7 @@ import {
 } from "./http.js";
 import { type ArrowInput, arrowBody, decodeSchema } from "./ipc.js";
 import { Metadata } from "./metadata.js";
+import { browserSignIn } from "./oauth.js";
 import { type Parameters, checkJsonParameters, isArrowParameters, parameterRows } from "./params.js";
 import { platform } from "#platform";
 import type { TlsOptions } from "./platform/types.js";
@@ -81,8 +82,20 @@ export interface ConnectOptions extends StatementOptions {
    * are sent with `credentials: "include"` (see `fetchCredentials`). The token the server
    * issues is bound to the certificate and renewed with it. Takes no username, password or
    * token. Default: `"password"` (or whichever credential is given).
+   *
+   * `"oauth_browser"`: browser sign-in with the server's identity provider (§4.3; servers
+   * with capability `oauth_browser`). `openUrl` is given the sign-in URL to open in a
+   * browser (or show); the connection waits up to `browserSignInTimeoutMs` for the person
+   * to sign in, then holds the server's own access token. When that token nears its
+   * expiry, the next request runs a new browser sign-in (`openUrl` again). Takes no
+   * username, password or token. In a web page that should come back to itself instead,
+   * use `beginBrowserRedirectSignIn` and `completeBrowserRedirectSignIn`, then `token`.
    */
-  authType?: "password" | "client_certificate";
+  authType?: "password" | "client_certificate" | "oauth_browser";
+  /** With `authType: "oauth_browser"`: opens (or shows) the identity provider's sign-in URL. */
+  openUrl?: (url: string) => void | Promise<void>;
+  /** With `authType: "oauth_browser"`: how long to wait for the person to sign in. Default 5 minutes. */
+  browserSignInTimeoutMs?: number;
   /**
    * fetch's credentials mode for every request. Browsers present a client certificate on
    * a cross-origin request only with `"include"` (and then need the server to allow
@@ -162,6 +175,22 @@ export async function connect(options: ConnectOptions): Promise<Connection> {
     (options.tls !== undefined
       ? await platform.tlsFetch(options.tls)
       : globalThis.fetch.bind<typeof fetch>(globalThis));
+  if (credentials.kind === "browser") {
+    // Each sign-in goes through the connection's own fetch (its TLS settings included).
+    const openUrl = options.openUrl!;
+    const timeoutMs = options.browserSignInTimeoutMs;
+    credentials.signIn = () =>
+      browserSignIn({
+        url: options.url,
+        ...(options.schemes !== undefined ? { schemes: options.schemes } : {}),
+        fetch: fetchFn,
+        ...(options.fetchCredentials !== undefined ? { fetchCredentials: options.fetchCredentials } : {}),
+        ...(options.userAgent !== undefined ? { userAgent: options.userAgent } : {}),
+        ...(options.signal !== undefined ? { signal: options.signal } : {}),
+        openUrl,
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      });
+  }
   const logger: Logger = {
     debug: options.logger?.debug?.bind(options.logger),
     warn: options.logger
@@ -206,6 +235,12 @@ export async function connect(options: ConnectOptions): Promise<Connection> {
         `(it offers ${Array.isArray(grants) ? grants.join(", ") || "none" : "no grant list"})`,
     });
   }
+  if (credentials.kind === "browser" && discovery.capabilities?.includes(Capability.oauthBrowser) !== true) {
+    throw new WarpSqlError({
+      code: ErrorCode.notImplemented,
+      message: `the server does not offer browser sign-in (capability ${Capability.oauthBrowser})`,
+    });
+  }
   if (grant !== undefined && Array.isArray(grants) && !grants.includes(grant)) {
     throw new WarpSqlError({
       code: ErrorCode.notImplemented,
@@ -227,10 +262,40 @@ export async function connect(options: ConnectOptions): Promise<Connection> {
 }
 
 function credentialsFrom(options: ConnectOptions): Credentials {
-  if (options.authType !== undefined && options.authType !== "password" && options.authType !== "client_certificate") {
+  if (
+    options.authType !== undefined &&
+    options.authType !== "password" &&
+    options.authType !== "client_certificate" &&
+    options.authType !== "oauth_browser"
+  ) {
     throw invalidArgument(
-      `authType must be "password" or "client_certificate", not ${JSON.stringify(options.authType)}`,
+      `authType must be "password", "client_certificate" or "oauth_browser", not ${JSON.stringify(options.authType)}`,
     );
+  }
+  if (
+    options.authType !== "oauth_browser" &&
+    (options.openUrl !== undefined || options.browserSignInTimeoutMs !== undefined)
+  ) {
+    throw invalidArgument('openUrl and browserSignInTimeoutMs go with authType "oauth_browser"');
+  }
+  if (options.authType === "oauth_browser") {
+    const extra = (["username", "password", "token", "tokenProvider", "subjectToken"] as const).filter(
+      (name) => options[name] !== undefined,
+    );
+    if (extra.length > 0) {
+      throw invalidArgument(
+        `authType "oauth_browser" signs in through the browser; do not also pass ${extra.join(", ")}`,
+      );
+    }
+    if (typeof options.openUrl !== "function") {
+      throw invalidArgument('authType "oauth_browser" needs openUrl, a function that opens (or shows) the sign-in URL');
+    }
+    const timeout = options.browserSignInTimeoutMs;
+    if (timeout !== undefined && (!Number.isFinite(timeout) || timeout <= 0)) {
+      throw invalidArgument("browserSignInTimeoutMs must be a positive number of milliseconds");
+    }
+    // Filled in by connect, which has the fetch.
+    return { kind: "browser", signIn: () => Promise.reject(new Error("browser sign-in not set up")) };
   }
   if (options.authType === "client_certificate") {
     const extra = (["username", "password", "token", "tokenProvider", "subjectToken"] as const).filter(

@@ -103,7 +103,7 @@ describe("client certificate sign-in (§4.4)", () => {
       connect({ url: "warp://db.test:31337", authType: "kerberos" as never, logger: quiet }),
       ErrorCode.invalidArgument,
     );
-    expect(err.message).toContain('"password" or "client_certificate"');
+    expect(err.message).toContain('"password", "client_certificate" or "oauth_browser"');
   });
 
   test("a server without capability mtls_identity is refused before the grant is sent", async () => {

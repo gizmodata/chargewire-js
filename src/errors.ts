@@ -26,6 +26,14 @@ export const ErrorCode = {
   certificateIdentityMismatch: "certificate_identity_mismatch",
   /** §4.4: a grant the server does not offer, such as client_certificate where certificate sign-in is off. */
   unsupportedGrantType: "unsupported_grant_type",
+  /** §4.3.2: no such browser sign-in flow, a wrong poll secret, or one already collected or expired. */
+  flowNotFound: "flow_not_found",
+  /** §4.3.3: a returnTo that is not a path on the server's own origin. */
+  invalidReturnTo: "invalid_return_to",
+  /** §4.3.2: the person or the identity provider refused the browser sign-in. */
+  accessDenied: "access_denied",
+  /** §4.3.2: the server could not complete the browser sign-in with the identity provider. */
+  identityProviderError: "identity_provider_error",
   permissionDenied: "permission_denied",
   readOnly: "read_only",
   sessionNotFound: "session_not_found",

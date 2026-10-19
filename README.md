@@ -149,13 +149,14 @@ client for any Warp SQL server. Another wrapper can add a scheme of its own by p
 
 `connect` takes exactly one credential:
 
-| Option                           | Grant                                                                                                                |
-| -------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `username`, `password`           | `password` (§4.1); any character, `:` and `@` included                                                               |
-| `token`                          | A Warp SQL access token issued elsewhere, used as is and never renewed                                               |
-| `tokenProvider`                  | A function returning a fresh access token, called at connect and whenever the server refuses the current one         |
-| `subjectToken`                   | An identity provider's token (string or function) for the `token_exchange` grant (SSO)                               |
-| `authType: "client_certificate"` | The TLS client certificate alone, no password (§4.4); see [Client certificate sign-in](#-client-certificate-sign-in) |
+| Option                                  | Grant                                                                                                                |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `username`, `password`                  | `password` (§4.1); any character, `:` and `@` included                                                               |
+| `token`                                 | A Warp SQL access token issued elsewhere, used as is and never renewed                                               |
+| `tokenProvider`                         | A function returning a fresh access token, called at connect and whenever the server refuses the current one         |
+| `subjectToken`                          | An identity provider's token (string or function) for the `token_exchange` grant (SSO)                               |
+| `authType: "client_certificate"`        | The TLS client certificate alone, no password (§4.4); see [Client certificate sign-in](#-client-certificate-sign-in) |
+| `authType: "oauth_browser"` + `openUrl` | Browser sign-in with the server's identity provider (§4.3); see [Browser sign-in](#-browser-sign-in-sso)             |
 
 Other `connect` options:
 
@@ -234,6 +235,59 @@ try {
   if (WarpSqlError.is(err, "unknown_certificate_identity")) console.log(err.code, err.status); // ... 401
 }
 ```
+
+## 🌐 Browser sign-in (SSO)
+
+A server with the capability `oauth_browser` signs people in with its identity provider
+(spec §4.3). The server is the provider's client, so the application needs no client id,
+secret or redirect handling: it creates a flow, the person signs in in a browser, and the
+client collects the server's own access token with the flow's poll secret, which is never
+put in a URL or logged. `browserSignInProvider(discovery)` gives the provider's name for a
+"Sign in with …" button.
+
+From Node or a desktop app, `openUrl` opens (or shows) the sign-in URL:
+
+```ts
+import { exec } from "node:child_process";
+import { connect } from "@gizmodata/warp-sql";
+
+const conn = await connect({
+  url: "warp://db.example.com:31337",
+  authType: "oauth_browser",
+  openUrl: (url) => void exec(`open ${JSON.stringify(url)}`), // or print it for the person
+  browserSignInTimeoutMs: 300_000,
+});
+```
+
+The connection waits for the sign-in, then uses the token; when the token nears its expiry
+the next request runs a new browser sign-in. `browserSignIn({ url, openUrl })` does the same
+without a connection and returns `{ accessToken, expiresIn }`.
+
+A web page goes to the provider and comes back to itself (`returnTo`, a path on the server's
+own origin): `beginBrowserRedirectSignIn` keeps the flow's poll secret in this tab's
+`sessionStorage` and sends the browser away; on the way back, `completeBrowserRedirectSignIn`
+reads the flow id from the URL fragment (`#warp_oauth_flow=…`), removes it from the address
+bar and collects the token. A flow this tab did not start is ignored.
+
+```ts
+import { beginBrowserRedirectSignIn, completeBrowserRedirectSignIn, connect } from "@gizmodata/warp-sql";
+
+const url = "https://db.example.com:31337";
+const signedIn = await completeBrowserRedirectSignIn({ url }); // undefined unless coming back
+if (signedIn === undefined) {
+  await beginBrowserRedirectSignIn({ url, returnTo: location.pathname }); // leaves the page
+} else {
+  const conn = await connect({ url, token: signedIn.accessToken });
+}
+```
+
+The steps are also there one by one: `startBrowserSignIn` (→ `flowId`, `pollSecret`,
+`authorizeUrl`, `pollIntervalS`, `expiresAt`), `pollBrowserSignIn` (→ `pending` or
+`complete`) and `takeBrowserSignInFlowId(url)`. A failed sign-in throws a `WarpSqlError` with
+the flow's code: `access_denied` (the person or the provider refused), `invalid_credentials`
+(the server does not let that user in), `identity_provider_error`; a flow that expired or was
+already collected, or a wrong poll secret, is `flow_not_found`, and a `returnTo` that is not a
+path on the server is `invalid_return_to`.
 
 ## 🧭 API
 

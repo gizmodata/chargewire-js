@@ -8,6 +8,18 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- Browser sign-in (warp-sql spec §4.3, capability `oauth_browser`): `connect({ authType:
+  "oauth_browser", openUrl })` signs in with the server's identity provider through a browser and
+  refuses a server without the capability before creating a flow; `browserSignIn` does it
+  without a connection; `startBrowserSignIn` (optional `returnTo`), `pollBrowserSignIn` (the
+  poll secret in the JSON body, never a URL or header; a failed flow throws its code) and
+  `takeBrowserSignInFlowId` are the steps; `beginBrowserRedirectSignIn` and
+  `completeBrowserRedirectSignIn` serve web pages that come back to themselves (the secret in
+  this tab's `sessionStorage`, the flow id read from and removed from the fragment, flows the tab
+  did not start ignored); `browserSignInProvider(discovery)` gives the provider's name. New error
+  codes `flow_not_found`, `invalid_return_to`, `access_denied`, `identity_provider_error`. Unit
+  tests (13) and live tests (4) against `warp-duckdb` with a mock OpenID Connect provider
+  (`test/live/idp.ts`; server flags in `WARP_SQL_JS_TEST_SERVER_OAUTH_ARGS`).
 - `conn.transactionState()` and `SessionDocument.transaction` (warp-sql spec §5.2): `none`,
   `open` or `aborted`, as the server's engine has it, so an application shows whether a
   transaction is open (from SQL `BEGIN` too, not only `setAutocommit(false)`) and whether a failed

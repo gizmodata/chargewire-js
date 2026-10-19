@@ -16,6 +16,21 @@ export {
   type StatementOptions,
 } from "./connection.js";
 export { ResultStream } from "./stream.js";
+export {
+  beginBrowserRedirectSignIn,
+  browserSignIn,
+  browserSignInFragmentKey,
+  browserSignInProvider,
+  completeBrowserRedirectSignIn,
+  pollBrowserSignIn,
+  startBrowserSignIn,
+  takeBrowserSignInFlowId,
+  type BrowserSignInFlow,
+  type BrowserSignInPoll,
+  type BrowserSignInResult,
+  type BrowserSignInStorage,
+  type BrowserSignInTarget,
+} from "./oauth.js";
 export { Metadata, type ColumnInfo, type MetadataCallOptions } from "./metadata.js";
 export {
   ErrorCode,

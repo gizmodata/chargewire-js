@@ -57,9 +57,13 @@ export async function freePort(): Promise<number> {
 /**
  * Launches the binary with a fresh password that contains ':' and '@' (credentials travel
  * as JSON fields, so nothing may split them, §4.1). `extra` takes warp-duckdb's flag
- * names; --tls-client-ca and --cors-origin are renamed to the server's own.
+ * names; --tls-client-ca and --cors-origin are renamed to the server's own. `{port}` in an
+ * argument becomes the server's port; `extraEnv` adds environment variables.
  */
-export async function launchServer(extra: string[] = []): Promise<RunningServer> {
+export async function launchServer(
+  extra: string[] = [],
+  extraEnv: Record<string, string> = {},
+): Promise<RunningServer> {
   const binary = process.env[binaryEnv];
   if (binary === undefined || binary === "") {
     throw new Error(`set ${binaryEnv} to a Warp SQL server binary (warp-duckdb or Hardcharger) to run the live tests`);
@@ -80,11 +84,15 @@ export async function launchServer(extra: string[] = []): Promise<RunningServer>
     if (arg === "--tls-cert") scheme = "https";
     if (arg === "--tls-client-ca") args.push(env("WARP_SQL_JS_TEST_SERVER_MTLS_FLAG", arg));
     else if (arg === "--cors-origin") args.push(env("WARP_SQL_JS_TEST_SERVER_CORS_FLAG", arg));
-    else args.push(arg);
+    else args.push(arg.replaceAll("{port}", String(port)));
   }
   const output: string[] = [];
   const child: ChildProcess = spawn(binary, args, {
-    env: { ...process.env, [env("WARP_SQL_JS_TEST_SERVER_PASSWORD_ENV", "WARP_DUCKDB_PASSWORD")]: password },
+    env: {
+      ...process.env,
+      ...extraEnv,
+      [env("WARP_SQL_JS_TEST_SERVER_PASSWORD_ENV", "WARP_DUCKDB_PASSWORD")]: password,
+    },
     stdio: ["ignore", "pipe", "pipe"],
   });
   child.stdout?.on("data", (chunk: Buffer) => output.push(chunk.toString()));

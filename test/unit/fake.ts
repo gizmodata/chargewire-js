@@ -85,7 +85,8 @@ export class FakeServer {
     const req: FakeRequest = { method: init?.method ?? "GET", url, headers, body };
     this.requests.push(req);
     const auth = headers.get("authorization");
-    const anonymous = url.pathname === "/warp" || url.pathname.endsWith("/auth/token");
+    const anonymous =
+      url.pathname === "/warp" || url.pathname.endsWith("/auth/token") || url.pathname.includes("/auth/oauth/");
     if (!anonymous && (auth === null || !this.validTokens.has(auth.replace(/^Bearer /, "")))) {
       return problem(401, "invalid_token", {}, { "www-authenticate": "Bearer" });
     }

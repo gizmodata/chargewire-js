@@ -18,7 +18,9 @@ export type Credentials =
   | { kind: "subject"; subjectToken: () => Promise<string> }
   | { kind: "provider"; provider: () => Promise<string> }
   | { kind: "static"; token: string }
-  | { kind: "certificate" }; // the client_certificate grant (§4.4): the TLS client certificate
+  | { kind: "certificate" } // the client_certificate grant (§4.4): the TLS client certificate
+  // browser sign-in (§4.3): each call runs one, the person signing in again
+  | { kind: "browser"; signIn: () => Promise<{ accessToken: string; expiresIn: number | undefined }> };
 
 /** A request body. One held in memory can be sent again; a stream is sent once. */
 export interface RequestBody {
@@ -265,6 +267,11 @@ export class HttpClient {
       this.#renewAt = undefined;
       return;
     }
+    if (credentials.kind === "browser") {
+      const { accessToken, expiresIn } = await credentials.signIn();
+      this.#setToken(accessToken, expiresIn);
+      return;
+    }
     const grant =
       credentials.kind === "password"
         ? { grant_type: "password", username: credentials.username, password: credentials.password }
@@ -286,10 +293,14 @@ export class HttpClient {
     ) {
       throw protocolError("the token endpoint did not return a bearer token");
     }
-    this.#token = answer.access_token;
+    this.#setToken(answer.access_token, typeof answer.expires_in === "number" ? answer.expires_in : undefined);
+  }
+
+  #setToken(token: string, expiresIn: number | undefined): void {
+    this.#token = token;
     this.#renewAt = undefined;
-    if (typeof answer.expires_in === "number" && answer.expires_in > 0) {
-      const lifetime = answer.expires_in * 1000;
+    if (expiresIn !== undefined && expiresIn > 0) {
+      const lifetime = expiresIn * 1000;
       this.#renewAt = Date.now() + lifetime - Math.min(renewMarginMs, lifetime / 4);
     }
   }

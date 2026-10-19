@@ -24,7 +24,11 @@ export interface DiscoveryDocument {
   draft?: string;
   server?: { name?: string; version?: string };
   capabilities?: string[];
-  auth?: { grant_types?: string[] };
+  auth?: {
+    grant_types?: string[];
+    /** Browser sign-in (§4.3), when the server offers it: the identity provider's name for people. */
+    oauth_browser?: { provider?: string };
+  };
   [key: string]: unknown;
 }
 
