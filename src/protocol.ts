@@ -29,9 +29,18 @@ export interface DiscoveryDocument {
 }
 
 /** A session (§5.1). */
+/**
+ * A session's transaction (§5.2): `none`, `open` (from BEGIN to its end, or while autocommit is
+ * off), or `aborted` (a statement failed or was cancelled inside it, and the engine refuses every
+ * statement until a rollback).
+ */
+export type TransactionState = "none" | "open" | "aborted";
+
 export interface SessionDocument {
   session_id: string;
   options?: Record<string, unknown>;
+  /** Where the session's transaction stands, as the engine has it (§5.2). */
+  transaction: TransactionState;
   idle_timeout_s?: number;
 }
 

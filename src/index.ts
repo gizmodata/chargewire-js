@@ -30,5 +30,11 @@ export type { ArrowInput } from "./ipc.js";
 export type { Logger } from "./http.js";
 export type { TlsOptions } from "./platform/types.js";
 export { Capability } from "./protocol.js";
-export type { DiscoveryDocument, SessionDocument, StatementDocument, StatementState } from "./protocol.js";
+export type {
+  DiscoveryDocument,
+  SessionDocument,
+  StatementDocument,
+  StatementState,
+  TransactionState,
+} from "./protocol.js";
 export { defaultSchemes, parseUrl, type SchemeDefinition, type SchemeMap } from "./url.js";

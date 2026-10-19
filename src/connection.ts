@@ -18,7 +18,13 @@ import { Metadata } from "./metadata.js";
 import { type Parameters, checkJsonParameters, isArrowParameters, parameterRows } from "./params.js";
 import { platform } from "#platform";
 import type { TlsOptions } from "./platform/types.js";
-import { Capability, type DiscoveryDocument, type PreparedDocument, type SessionDocument } from "./protocol.js";
+import {
+  Capability,
+  type DiscoveryDocument,
+  type PreparedDocument,
+  type SessionDocument,
+  type TransactionState,
+} from "./protocol.js";
 import { Session, sessionPath } from "./session.js";
 import { Execution, type PreparedRef, maxResultPartitions, runRows, runUpdate } from "./statement.js";
 import { ResultStream } from "./stream.js";
@@ -530,10 +536,22 @@ export class Connection {
     return this.#core.session.setOptions(sessionOptions, options.signal);
   }
 
-  /** The session document (§5.2), with the session's current options (a `USE` shows here). */
+  /**
+   * The session document (§5.2), with the session's current options (a `USE` shows here) and its
+   * transaction (a SQL `BEGIN` shows here too, once the statement has ended).
+   */
   async getSession(options: { signal?: AbortSignal } = {}): Promise<SessionDocument> {
     await this.#before();
     return this.#core.session.get(options.signal);
+  }
+
+  /**
+   * Where the session's transaction stands (§5.2): `none`, `open`, or `aborted` (a statement failed
+   * or was cancelled inside it; only a rollback ends it). Read from the server, so it follows SQL
+   * `BEGIN`/`COMMIT` and what the engine does after an error, not only `setAutocommit`.
+   */
+  async transactionState(options: { signal?: AbortSignal } = {}): Promise<TransactionState> {
+    return (await this.getSession(options)).transaction;
   }
 
   /** Turns autocommit off (a transaction starts, §5.5) or back on. */

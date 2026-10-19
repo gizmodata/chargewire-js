@@ -164,7 +164,9 @@ describe("retries", () => {
     const server = new FakeServer();
     let calls = 0;
     server.on("GET", /\/sessions\/s1$/, () =>
-      ++calls === 1 ? problem(421, "session_elsewhere") : json(200, { session_id: "s1", options: {} }),
+      ++calls === 1
+        ? problem(421, "session_elsewhere")
+        : json(200, { session_id: "s1", options: {}, transaction: "none" }),
     );
     const conn = await open(server);
     expect((await conn.getSession()).session_id).toBe("s1");

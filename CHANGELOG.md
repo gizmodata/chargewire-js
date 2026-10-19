@@ -6,6 +6,14 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Added
+
+- `conn.transactionState()` and `SessionDocument.transaction` (warp-sql spec §5.2): `none`,
+  `open` or `aborted`, as the server's engine has it, so an application shows whether a
+  transaction is open (from SQL `BEGIN` too, not only `setAutocommit(false)`) and whether a failed
+  or cancelled statement left it needing a rollback. Exported type: `TransactionState`. Live tests:
+  SQL `BEGIN`, an aborting failure and `ROLLBACK`; autocommit off and on; a streamed `BEGIN`.
+
 ### Changed
 
 - The README points Hardcharger users to `@gizmodata/hardcharger` (gizmodata/hardcharger-js), the

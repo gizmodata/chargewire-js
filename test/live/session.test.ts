@@ -46,6 +46,39 @@ describe("transactions (§5.5)", () => {
   });
 });
 
+describe("the session's transaction (§5.2)", () => {
+  test("follows SQL BEGIN, an aborting failure and ROLLBACK", async () => {
+    const conn = await open();
+    await conn.execute("CREATE OR REPLACE TABLE tx_state (v INTEGER PRIMARY KEY)");
+    expect(await conn.transactionState()).toBe("none");
+    await conn.execute("BEGIN");
+    expect(await conn.transactionState()).toBe("open");
+    await expect(conn.execute("INSERT INTO tx_state VALUES (1), (1)")).rejects.toThrow();
+    expect(await conn.transactionState()).toBe("aborted");
+    await conn.execute("ROLLBACK");
+    expect(await conn.transactionState()).toBe("none");
+  });
+
+  test("is open while autocommit is off, and none after it is back on", async () => {
+    const conn = await open();
+    await conn.setAutocommit(false);
+    expect((await conn.getSession()).transaction).toBe("open");
+    await conn.commit();
+    expect(await conn.transactionState()).toBe("open");
+    await conn.setAutocommit(true);
+    expect(await conn.transactionState()).toBe("none");
+  });
+
+  test("a streamed statement's effect shows once its result is read", async () => {
+    const conn = await open({ resultPartitions: 1 });
+    const table = await conn.query("BEGIN");
+    expect(table.numRows).toBe(0);
+    expect(await conn.transactionState()).toBe("open");
+    await conn.query("COMMIT");
+    expect(await conn.transactionState()).toBe("none");
+  });
+});
+
 describe("one session, several results", () => {
   test("a stream left unread does not block the next statement: it is read ahead into memory", async () => {
     const conn = await open({ resultPartitions: 1 });

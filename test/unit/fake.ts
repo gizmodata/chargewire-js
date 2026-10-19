@@ -61,7 +61,7 @@ export class FakeServer {
       });
     });
     this.on("POST", /^\/warp\/v1\/sessions$/, () =>
-      json(201, { session_id: `s${++this.sessions}`, options: {}, idle_timeout_s: 900 }),
+      json(201, { session_id: `s${++this.sessions}`, options: {}, transaction: "none", idle_timeout_s: 900 }),
     );
     this.on("DELETE", /^\/warp\/v1\/sessions\/[^/]+$/, () => new Response(null, { status: 204 }));
   }
