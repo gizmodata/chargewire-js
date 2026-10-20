@@ -243,6 +243,25 @@ describe("retries", () => {
     expect(commits).toBe(1);
   });
 
+  test("close waits for a statement's delete before ending the session", async () => {
+    const server = new FakeServer();
+    let release: (() => void) | undefined;
+    server.on("POST", /\/statements$/, () => json(200, doneDoc("q1", { kind: "update", rows_affected: 1 })));
+    server.on("DELETE", /\/statements\/q1$/, async () => {
+      await new Promise<void>((resolve) => (release = resolve));
+      return new Response(null, { status: 204 });
+    });
+    const conn = await open(server);
+    expect(await conn.execute("ROLLBACK")).toBe(1);
+    const closing = conn.close();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(server.count("DELETE", /^\/warp\/v1\/sessions\/[^/]+$/)).toBe(0);
+    release!();
+    await closing;
+    const order = server.requests.filter((r) => r.method === "DELETE").map((r) => r.url.pathname);
+    expect(order).toEqual(["/warp/v1/sessions/s1/statements/q1", "/warp/v1/sessions/s1"]);
+  });
+
   test("a submit is retried after a lost answer with the same Idempotency-Key", async () => {
     const server = new FakeServer();
     const keys: string[] = [];

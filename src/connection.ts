@@ -664,6 +664,9 @@ export class Connection {
     core.closed = true;
     const streams = [...core.openStreams] as ResultStream[];
     await Promise.all(streams.map((s) => s.close().catch(() => {})));
+    // A statement's delete (sent off the caller's path) goes before the session's: sent after
+    // it, it would meet a session that is gone, and a browser logs that 404 as an error.
+    await Promise.allSettled([...core.pending]);
     await core.session.close();
   }
 

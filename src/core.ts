@@ -82,8 +82,15 @@ export class Core {
   }
 
   /** Runs cleanup off the caller's path; its failure is only logged. */
+  /** Work started off the caller's path (statement deletes) that close() waits for. */
+  readonly pending = new Set<Promise<unknown>>();
+
   background(what: string, task: () => Promise<unknown>): void {
-    task().catch((err: unknown) => this.logger.debug?.(`background ${what} failed`, { error: String(err) }));
+    const run = task().catch((err: unknown) =>
+      this.logger.debug?.(`background ${what} failed`, { error: String(err) }),
+    );
+    this.pending.add(run);
+    void run.finally(() => this.pending.delete(run));
   }
 
   /**

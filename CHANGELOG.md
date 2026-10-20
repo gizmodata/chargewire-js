@@ -107,6 +107,9 @@ All notable changes to this project are documented in this file. The format is b
   web UI found it with its first upload). The writer is now read as an async iterable, which
   works everywhere, and the encoder holds at most about 8 MB of encoded batches ahead of the
   request instead of encoding the whole input ahead of it.
+- `close()` waits for the deletes of finished statements (sent off the caller's path) before it
+  ends the session. A statement run just before `close()` (a `ROLLBACK` in a `finally`, say) had
+  its delete arrive after the session's and answered `404`, which a browser logs as an error.
 
 - A streamed result split into several partitions without `Warp-Result-Order` (or with an unknown
   one) was read as `any`; it is a `client_protocol_error` (§6.10). So is a statement document with
