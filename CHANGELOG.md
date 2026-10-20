@@ -6,6 +6,12 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Fixed
+
+- A query finishing during connection close no longer sends a late statement-delete request
+  against the ended session. Session close releases those statements, avoiding spurious 404
+  errors during browser sign-out while preserving cleanup already in progress.
+
 ## [1.0.0] - 2026-10-20
 
 The first release, for Warp SQL protocol 1.0.0. Earlier builds (0.1.0) were never published;

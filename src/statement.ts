@@ -302,6 +302,9 @@ export class Execution {
   free(): void {
     if (this.#freed || this.statementId === undefined || this.sessionId === undefined) return;
     this.#freed = true;
+    // close() owns session cleanup, including statements that finish after its pending
+    // cleanup snapshot. Deleting one separately now can race the session's DELETE.
+    if (this.core.closed) return;
     const path = this.#statementPath();
     const http = this.core.http;
     this.core.background("statement delete", async () => {

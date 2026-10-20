@@ -262,6 +262,35 @@ describe("retries", () => {
     expect(order).toEqual(["/warp/v1/sessions/s1/statements/q1", "/warp/v1/sessions/s1"]);
   });
 
+  test.each(["query", "execute"] as const)(
+    "%s finishing after close does not delete a statement from the ended session",
+    async (method) => {
+      const server = new FakeServer();
+      let release!: (response: Response) => void;
+      let submitted!: () => void;
+      const response = new Promise<Response>((resolve) => (release = resolve));
+      const started = new Promise<void>((resolve) => (submitted = resolve));
+      server.on("POST", /\/statements$/, () => {
+        submitted();
+        return response;
+      });
+      const conn = await open(server);
+      const result = conn[method]("SELECT 42 AS answer");
+      await started;
+      await conn.close();
+      expect(server.count("DELETE", /^\/warp\/v1\/sessions\/[^/]+$/)).toBe(1);
+      release(
+        method === "query"
+          ? arrow(tableFromArrays({ answer: [42] }), { "warp-statement-id": "q1" })
+          : json(200, doneDoc("q1", { kind: "update", rows_affected: 1 })),
+      );
+      await result;
+      // Drain cleanup microtasks before checking that none reached the ended session.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(server.count("DELETE", /\/statements\/q1$/)).toBe(0);
+    },
+  );
+
   test("a submit is retried after a lost answer with the same Idempotency-Key", async () => {
     const server = new FakeServer();
     const keys: string[] = [];
