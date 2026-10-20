@@ -14,6 +14,8 @@ the Changed and Fixed entries describe what moved since them, for anyone who ins
 
 ### Added
 
+- Release automation uses separate concurrency groups for the publishing workflow and
+  its reusable test workflow, so a tag cannot deadlock while waiting for its own tests.
 - `@gizmodata/warp-sql`: a TypeScript client for the Warp SQL protocol over plain
   `fetch` and Apache Arrow, for Node 22.19+, browsers, Deno, Bun and Cloudflare Workers. ESM and
   CJS builds with types; a `node` build (TLS options through undici, streamed uploads, 8

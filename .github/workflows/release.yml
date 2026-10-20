@@ -19,7 +19,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # ci.yml is called below and uses github.workflow + github.ref too. Give the
+  # caller its own group so it cannot wait on its own reusable workflow.
+  group: release-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
