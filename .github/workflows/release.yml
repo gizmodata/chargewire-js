@@ -81,9 +81,8 @@ jobs:
         run: npm install -g npm@latest && npm --version
       - run: npm ci
       - run: npm run build
-      # restricted: the package stays private to the npm organization. Making it public is a
-      # decision for GizmoData, not a default.
+      # public, as package.json's publishConfig says.
       - name: Publish
         env:
           WARP_SQL_JS_RELEASE: "1"
-        run: npm publish --access restricted
+        run: npm publish --access public

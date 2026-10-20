@@ -39,8 +39,17 @@ the reference server `warp-duckdb`.
 - ✅ **Never a short table:** a result stream that ends without Arrow's end-of-stream marker
   throws; it is never taken for a complete result.
 
-> **Status: internal, unreleased (0.1.0).** Tested against `warp-duckdb` (warp-sql main) and
-> Hardcharger 0.2.0. Not published to npm.
+> **Status: 1.0.0, for Warp SQL protocol 1.0.0.** Tested against `warp-duckdb` (warp-sql main) and
+> Hardcharger 2.0.0.
+
+## 📥 Install
+
+```bash
+npm install @gizmodata/warp-sql apache-arrow
+```
+
+`apache-arrow` (21.2 or later) is a peer dependency, so your application and the client share one
+copy of Arrow's classes.
 
 ## 🚀 Quick start (Node)
 
@@ -488,9 +497,7 @@ it), and stubbing out the server-side cancel makes the cancel tests fail. The fa
 in [test/live/helpers.ts](test/live/helpers.ts) cuts result streams and drops answers to test
 resumption and idempotent retries against the real server.
 
-CI runs all of it but `test:browser:mtls` against the Hardcharger image of its main branch (`ghcr.io/gizmodata/hardcharger:main`, private).
-The image's package must grant this repository read access (package settings, "Manage Actions
-access"), or the live jobs fail.
+CI runs all of it but `test:browser:mtls` against the Hardcharger image of its main branch (`ghcr.io/gizmodata/hardcharger:main`).
 
 ## 🐛 Known server issue
 
@@ -504,10 +511,9 @@ the first would fail. With a client certificate, this client turns session resum
 Releases are tags: update `CHANGELOG.md` and the version in `package.json`, commit, and push
 `main` and `vX.Y.Z` together. `release.yml` runs the full suite on the tagged commit, then makes a
 GitHub Release with the package tarball and the CHANGELOG section, then (once enabled) publishes to
-npm with trusted publishing (OIDC, no stored token). Publishing is off until GizmoData sets up the
-`@gizmodata/warp-sql` package on npm, adds this repository's `release.yml` (environment `npm`) as its
-trusted publisher, creates the `npm` environment, and sets the repository variable
-`NPM_PUBLISH_ENABLED` to `true`. `npm publish` from a laptop refuses to run.
+npm with trusted publishing (OIDC, no stored token) when the repository variable
+`NPM_PUBLISH_ENABLED` is `true` (the npm package's trusted publisher is this repository's
+`release.yml`, environment `npm`). `npm publish` from a laptop refuses to run.
 
 ## 📄 License
 

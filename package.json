@@ -1,6 +1,6 @@
 {
   "name": "@gizmodata/warp-sql",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "JavaScript/TypeScript client for the Warp SQL protocol: SQL over plain HTTP with Apache Arrow results, for Node, browsers, Deno, Bun and edge runtimes.",
   "author": "GizmoData LLC",
   "license": "Apache-2.0",
@@ -21,6 +21,9 @@
     "fetch",
     "duckdb"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "sideEffects": false,
   "exports": {
     ".": {

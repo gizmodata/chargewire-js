@@ -5,10 +5,11 @@ name: warp-sql-js-ci
 # and Chromium and WebKit (Playwright).
 #
 # The live suites need a Warp SQL server. They use the Hardcharger release image
-# (ghcr.io/gizmodata/hardcharger, private), pulled with this workflow's GITHUB_TOKEN. That
-# works only once the package grants this repository read access: on GitHub, the
-# hardcharger package's settings, "Manage Actions access", add gizmodata/warp-sql-js (Read).
-# Until then the `server` job fails, and so does every live job: they never skip.
+# (ghcr.io/gizmodata/hardcharger), pulled with this workflow's GITHUB_TOKEN. While the image
+# is private that works only once the package grants this repository read access: on GitHub,
+# the hardcharger package's settings, "Manage Actions access", add gizmodata/warp-sql-js
+# (Read). Without it the `server` job fails, and so does every live job: they never skip.
+# Once the image is public the login is unnecessary but harmless.
 
 on:
   push:
