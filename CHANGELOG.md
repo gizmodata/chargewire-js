@@ -100,6 +100,14 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Uploads (`ingest`, Arrow parameters) from a bundled browser app. The encoder used
+  `RecordBatchStreamWriter.throughDOM()`, which apache-arrow installs only as a side effect of
+  its DOM entry point; it declares `"sideEffects": false`, so Vite, webpack and esbuild drop that
+  and every upload failed with `"throughDOM" not available in this environment` (Hardcharger's
+  web UI found it with its first upload). The writer is now read as an async iterable, which
+  works everywhere, and the encoder holds at most about 8 MB of encoded batches ahead of the
+  request instead of encoding the whole input ahead of it.
+
 - A streamed result split into several partitions without `Warp-Result-Order` (or with an unknown
   one) was read as `any`; it is a `client_protocol_error` (§6.10). So is a statement document with
   several partitions and no (or an unknown) `partition_order`, which was read partition after

@@ -269,7 +269,18 @@ async function* toAsync<T>(items: Iterable<T>): AsyncGenerator<T> {
   for (const item of items) yield await Promise.resolve(item);
 }
 
-/** Encodes batches as one Arrow IPC stream, chunk by chunk. */
+/** Bytes of encoded batches held ahead of the reader while encoding an upload. */
+const encodeAheadBytes = 8 << 20;
+
+/**
+ * Encodes batches as one Arrow IPC stream, chunk by chunk, holding at most about
+ * `encodeAheadBytes` of encoded batches ahead of the reader.
+ *
+ * The writer is read as an async iterable, not through `RecordBatchStreamWriter.throughDOM()`:
+ * that is installed only as a side effect of Arrow's DOM entry point, which bundlers drop
+ * (apache-arrow declares `"sideEffects": false`), so a bundled browser app had no
+ * `throughDOM` and every upload failed with '"throughDOM" not available in this environment'.
+ */
 export async function* encodeStream(schema: Schema, batches: AsyncIterable<RecordBatch>): AsyncGenerator<Uint8Array> {
   const iterator = batches[Symbol.asyncIterator]();
   const first = await iterator.next();
@@ -277,42 +288,47 @@ export async function* encodeStream(schema: Schema, batches: AsyncIterable<Recor
     yield tableToIPC(new Table(schema), "stream"); // the schema and the end-of-stream marker
     return;
   }
-  const { writable, readable } = RecordBatchStreamWriter.throughDOM();
-  const writer = writable.getWriter();
+  const writer = new RecordBatchStreamWriter();
+  let ahead = 0;
+  let wake: (() => void) | undefined;
+  let stopped = false;
   let feedError: unknown;
   const feed = (async () => {
     try {
       let next: IteratorResult<RecordBatch> = first;
-      while (!next.done) {
+      while (!next.done && !stopped) {
         if (!util.compareSchemas(next.value.schema, schema)) {
           throw invalidArgument("every batch of an upload must have the same schema");
         }
-        await writer.write(next.value);
+        while (ahead > encodeAheadBytes && !stopped) await new Promise<void>((resolve) => (wake = resolve));
+        if (stopped) break;
+        ahead += batchBytes(next.value);
+        writer.write(next.value);
         next = await iterator.next();
       }
-      await writer.close();
     } catch (err) {
       feedError = err;
-      await writer.abort(err).catch(() => {});
+    } finally {
+      // Ends the stream (with the end-of-stream marker); after an error the reader stops
+      // first, so a cut stream is never mistaken for a whole one.
+      writer.close();
     }
   })();
-  const reader = readable.getReader();
   try {
-    for (;;) {
-      let chunk: ReadableStreamReadResult<Uint8Array>;
-      try {
-        chunk = await reader.read();
-      } catch (err) {
-        await feed;
-        throw feedError ?? err;
-      }
-      if (chunk.done) break;
-      yield chunk.value;
+    for await (const chunk of writer as AsyncIterable<Uint8Array>) {
+      if (feedError !== undefined) break;
+      ahead -= chunk.byteLength;
+      const w = wake;
+      wake = undefined;
+      w?.();
+      yield chunk;
     }
     await feed;
     if (feedError !== undefined) throw feedError as Error;
   } finally {
-    reader.cancel().catch(() => {});
+    stopped = true;
+    wake?.();
+    await feed;
     await iterator.return?.();
   }
 }

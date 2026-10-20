@@ -1,5 +1,12 @@
-import { Table, tableFromArrays, tableToIPC } from "apache-arrow";
-import { describe, expect, test } from "vitest";
+import {
+  type RecordBatch,
+  RecordBatchStreamWriter,
+  Table,
+  tableFromArrays,
+  tableFromIPC,
+  tableToIPC,
+} from "apache-arrow";
+import { describe, expect, test, vi } from "vitest";
 
 import { ErrorCode, WarpSqlError } from "../../src/index.js";
 import {
@@ -111,6 +118,64 @@ describe("encoding uploads", () => {
     scanner.push(concat(chunks));
     expect(scanner.sawEos).toBe(true);
     expect(scanner.recordBatches).toBe(0);
+  });
+
+  test("encodes without RecordBatchStreamWriter.throughDOM, which a bundled browser app lacks", async () => {
+    // apache-arrow installs throughDOM only as a side effect of its DOM entry point, which a
+    // bundler drops ("sideEffects": false): in a Vite or webpack build it throws.
+    const spy = vi.spyOn(RecordBatchStreamWriter, "throughDOM").mockImplementation(() => {
+      throw new Error('"throughDOM" not available in this environment');
+    });
+    try {
+      const { schema, batches } = await openInput(threeBatches);
+      const chunks: Uint8Array[] = [];
+      for await (const c of encodeStream(schema, batches)) chunks.push(c);
+      const back = tableFromIPC(concat(chunks));
+      expect(back.numRows).toBe(threeBatches.numRows);
+      expect(back.getChild("s")!.get(5019)).toBe("v19");
+      const scanner = new IpcScanner();
+      scanner.push(concat(chunks));
+      expect(scanner.sawEos).toBe(true);
+      expect(scanner.recordBatches).toBe(3);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test("encoding runs only a few megabytes ahead of the reader", async () => {
+    const batch = tableFromArrays({ x: Float64Array.from({ length: 1 << 17 }, (_, i) => i) }).batches[0]!; // 1 MiB
+    let pulled = 0;
+    async function* many(): AsyncGenerator<RecordBatch> {
+      for (let i = 0; i < 64; i++) {
+        pulled++;
+        yield batch;
+      }
+    }
+    const chunks = encodeStream(batch.schema, many());
+    await chunks.next();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(pulled).toBeLessThan(16);
+    let n = 1;
+    while (!(await chunks.next()).done) n++;
+    expect(pulled).toBe(64);
+    expect(n).toBeGreaterThan(64);
+  });
+
+  test("an upload whose input fails ends with the error, never a whole-looking stream", async () => {
+    async function* failing(): AsyncGenerator<RecordBatch> {
+      yield table.batches[0]!;
+      throw new Error("the file broke off");
+    }
+    const { schema, batches } = await openInput(failing());
+    const chunks: Uint8Array[] = [];
+    await expect(
+      (async () => {
+        for await (const c of encodeStream(schema, batches)) chunks.push(c);
+      })(),
+    ).rejects.toThrow("the file broke off");
+    const scanner = new IpcScanner();
+    scanner.push(concat(chunks));
+    expect(scanner.sawEos).toBe(false);
   });
 
   test("batches of different schemas are refused", async () => {
