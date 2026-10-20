@@ -233,11 +233,13 @@ export class Metadata {
     const core = this.#core;
     core.checkOpen();
     await core.settle();
+    const headers: Record<string, string> = { Accept: mediaTypeArrow };
+    if (core.settings.ipcCodec !== undefined) headers["Warp-IPC-Compression"] = core.settings.ipcCodec;
     const resp = await core.session.do("session", "", (id) => ({
       method: "GET",
       path: `${sessionPath(id)}/metadata/${kind}`,
       query,
-      headers: { Accept: mediaTypeArrow },
+      headers,
       idempotent: true,
       signal: options.signal,
     }));

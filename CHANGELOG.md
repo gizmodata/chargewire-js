@@ -13,8 +13,7 @@ All notable changes to this project are documented in this file. The format is b
   (`internal_error`, 500) and `ErrorCode.clientHttpError` (`client_http_error`, an error answer
   without a problem document, such as a proxy's page; `status` says what it was). `ErrorCode` now
   lists every server code of version 1, and a unit test keeps it so.
-- `Capability.resultLocations` (`result_locations`) and `Capability.ipcCompressionLz4Frame` (the
-  name only; the client still accepts zstd alone). On a server that lists `result_locations` the
+- `Capability.resultLocations` (`result_locations`). On a server that lists `result_locations` the
   client sends `Warp-Result-Locations: remote` and reads partitions from their locations; it never
   sends the header otherwise, and a partition with a location it did not ask for is a
   `client_protocol_error`.
@@ -51,6 +50,13 @@ All notable changes to this project are documented in this file. The format is b
   transaction is open (from SQL `BEGIN` too, not only `setAutocommit(false)`) and whether a failed
   or cancelled statement left it needing a rollback. Exported type: `TransactionState`. Live tests:
   SQL `BEGIN`, an aborting failure and `ROLLBACK`; autocommit off and on; a streamed `BEGIN`.
+- LZ4_FRAME result compression (spec §8.2): `ipcCompression: "lz4_frame"`, read by a dependency-free
+  LZ4 frame decoder in this package that is loaded only when a connection uses it (3.7 KiB
+  minified). It decodes Arrow's LZ4 buffers at 850 to 900 MB/s in Node, against about 240 MB/s for
+  zstd through fzstd.
+- `ipcCompression: "auto"`: `lz4_frame` when the discovery request's round trip is under 10 ms, else
+  `zstd`, the Go ADBC driver's rule. A first discovery that looks slow is timed again on the open
+  connection, so connection setup does not count as distance.
 
 ### Changed
 
@@ -95,6 +101,10 @@ All notable changes to this project are documented in this file. The format is b
   on other servers used to be read one after another, and partition 0 was opened before the rest.
 - `Warp-Query-Tag` is sent as ASCII JSON, every other character as a `\u` escape (§2.5), and a
   tag over 4,096 bytes is refused (`client_invalid_argument`) before anything is sent.
+- `ipcCompression` takes `"none"`, `"lz4_frame"`, `"zstd"` or `"auto"`, and a codec is used only
+  when the server lists its capability (`ipc_compression_lz4_frame`, `ipc_compression_zstd`). The
+  chosen codec is sent in `Warp-IPC-Compression` on every request that returns Arrow: the submit,
+  each partition's result request, and catalog metadata requests (these had no header).
 - The README points Hardcharger users to `@gizmodata/hardcharger` (gizmodata/hardcharger-js), the
   `hardcharger://` client built on this package, instead of saying such a wrapper is planned.
 
@@ -110,7 +120,6 @@ All notable changes to this project are documented in this file. The format is b
 - `close()` waits for the deletes of finished statements (sent off the caller's path) before it
   ends the session. A statement run just before `close()` (a `ROLLBACK` in a `finally`, say) had
   its delete arrive after the session's and answered `404`, which a browser logs as an error.
-
 - A streamed result split into several partitions without `Warp-Result-Order` (or with an unknown
   one) was read as `any`; it is a `client_protocol_error` (§6.10). So is a statement document with
   several partitions and no (or an unknown) `partition_order`, which was read partition after

@@ -2,6 +2,7 @@
 
 import type { Schema, Table } from "apache-arrow";
 
+import { type IpcCompression, ipcCompressions } from "./compression.js";
 import { Core, type StatementSettings } from "./core.js";
 import { ErrorCode, WarpSqlError, invalidArgument, protocolError } from "./errors.js";
 import {
@@ -32,7 +33,6 @@ import { Execution, type PreparedRef, maxResultPartitions, runRows, runUpdate } 
 import { ResultStream } from "./stream.js";
 import { type SchemeMap, defaultSchemes, parseUrl } from "./url.js";
 import { version } from "./version.js";
-import { enableZstd } from "./zstd.js";
 
 /** How a statement runs. Set on `connect` as defaults, or per call. */
 export interface StatementOptions {
@@ -52,8 +52,14 @@ export interface StatementOptions {
    * most 4,096 bytes; a larger tag is refused before anything is sent.
    */
   queryTag?: Record<string, unknown>;
-  /** `zstd` accepts ZSTD-compressed Arrow buffers in results, if the server offers them (§8.2). Default `none`. */
-  ipcCompression?: "none" | "zstd";
+  /**
+   * Arrow buffer compression for results (§8.2), used only when the server lists the
+   * codec's capability: `lz4_frame` (cheap to decode, for fast links), `zstd` (smaller,
+   * for slow links), or `auto`: lz4_frame when the discovery request's round trip is under
+   * 10 ms, else zstd. Default `none`: decoding runs on the thread that reads the result,
+   * which in a browser is usually the main thread.
+   */
+  ipcCompression?: IpcCompression;
   /**
    * Read up to this many partitions of a result at once, each over its own connection
    * (§6.10); 1 reads one stream. Default 8 in Node, Deno and Bun, 4 in browsers and edge
@@ -219,7 +225,7 @@ export async function connect(options: ConnectOptions): Promise<Connection> {
   if (!Number.isFinite(resultBufferBytes) || resultBufferBytes < 0)
     throw invalidArgument("resultBufferBytes must be a number of bytes");
 
-  const discovery = await discover(http, options.signal);
+  const { discovery, rttMs: discoveryRttMs } = await discover(http, options.signal);
   const grant =
     credentials.kind === "password"
       ? "password"
@@ -259,11 +265,8 @@ export async function connect(options: ConnectOptions): Promise<Connection> {
   if (options.catalog !== undefined) sessionOptions["catalog"] = options.catalog;
   if (options.schema !== undefined) sessionOptions["schema"] = options.schema;
   const session = await Session.open(http, sessionOptions, options.reconnect ?? true);
-  const core = new Core({ http, session, discovery, platform, settings, resultBufferBytes });
-  if (settings.zstd) {
-    if (core.has(Capability.ipcCompressionZstd)) await enableZstd();
-    else settings.zstd = false;
-  }
+  const core = new Core({ http, session, discovery, platform, settings, resultBufferBytes, discoveryRttMs });
+  await core.resolveCodec(settings);
   return new Connection(core);
 }
 
@@ -346,10 +349,19 @@ function credentialsFrom(options: ConnectOptions): Credentials {
   return { kind: "subject", subjectToken: async () => (typeof subject === "function" ? subject() : subject) };
 }
 
-async function discover(http: HttpClient, signal: AbortSignal | undefined): Promise<DiscoveryDocument> {
+/** Reads the discovery document, timing it to its response headers: about a round trip (see Core.linkRttMs). */
+async function discover(
+  http: HttpClient,
+  signal: AbortSignal | undefined,
+): Promise<{ discovery: DiscoveryDocument; rttMs: number }> {
   let doc: DiscoveryDocument;
+  let rttMs: number;
   try {
-    doc = await http.json<DiscoveryDocument>({ method: "GET", path: "", idempotent: true, anonymous: true, signal });
+    const req = { method: "GET", path: "", idempotent: true, anonymous: true, signal } as const;
+    const start = performance.now();
+    const resp = await http.request(req);
+    rttMs = performance.now() - start;
+    doc = await decodeJSON<DiscoveryDocument>(resp, req);
   } catch (err) {
     if (WarpSqlError.is(err, ErrorCode.clientProtocolError, ErrorCode.clientHttpError, ErrorCode.notFound)) {
       throw protocolError(`${http.base.href} does not describe a Warp SQL server: ${(err as Error).message}`, err);
@@ -366,7 +378,7 @@ async function discover(http: HttpClient, signal: AbortSignal | undefined): Prom
       `the server at ${http.base.href} does not speak Warp SQL version 1 (it offers ${JSON.stringify(doc.protocol_versions)})`,
     );
   }
-  return doc;
+  return { discovery: doc, rttMs };
 }
 
 function defaultsFrom(options: ConnectOptions): StatementSettings {
@@ -375,7 +387,8 @@ function defaultsFrom(options: ConnectOptions): StatementSettings {
     retainResult: undefined,
     statementTimeoutMs: undefined,
     queryTag: undefined,
-    zstd: false,
+    ipcCompression: "none",
+    ipcCodec: undefined,
     resultPartitions: options.resultPartitions ?? platform.defaultResultPartitions,
     resultOrder: "preserve",
   };
@@ -394,10 +407,12 @@ function resolveSettings(defaults: StatementSettings, options: StatementOptions)
   }
   if (options.queryTag !== undefined) s.queryTag = queryTagHeader(options.queryTag);
   if (options.ipcCompression !== undefined) {
-    if (options.ipcCompression !== "none" && options.ipcCompression !== "zstd") {
-      throw invalidArgument(`ipcCompression must be "none" or "zstd", not ${JSON.stringify(options.ipcCompression)}`);
+    if (!ipcCompressions.includes(options.ipcCompression)) {
+      throw invalidArgument(
+        `ipcCompression must be ${ipcCompressions.map((c) => `"${c}"`).join(", ")}, not ${JSON.stringify(options.ipcCompression)}`,
+      );
     }
-    s.zstd = options.ipcCompression === "zstd";
+    s.ipcCompression = options.ipcCompression;
   }
   if (options.resultPartitions !== undefined) {
     const n = options.resultPartitions;
@@ -457,10 +472,7 @@ export class Connection {
 
   async #settings(options: StatementOptions): Promise<StatementSettings> {
     const s = resolveSettings(this.#core.settings, options);
-    if (s.zstd) {
-      if (this.#core.has(Capability.ipcCompressionZstd)) await enableZstd();
-      else s.zstd = false;
-    }
+    await this.#core.resolveCodec(s);
     return s;
   }
 
@@ -831,10 +843,7 @@ export class PreparedStatement {
 
   async #settings(options: StatementOptions): Promise<StatementSettings> {
     const s = resolveSettings(this.#core.settings, options);
-    if (s.zstd) {
-      if (this.#core.has(Capability.ipcCompressionZstd)) await enableZstd();
-      else s.zstd = false;
-    }
+    await this.#core.resolveCodec(s);
     return s;
   }
 

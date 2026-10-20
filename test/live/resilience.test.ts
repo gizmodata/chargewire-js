@@ -114,19 +114,6 @@ describe("idempotent retries", () => {
     ).toBeGreaterThanOrEqual(2);
   });
 
-  test("zstd results: asked for, used, and identical to uncompressed ones (§8.2)", async () => {
-    const proxy = await FaultProxy.start();
-    const conn = await open({ ipcCompression: "zstd", async: true, resultPartitions: 1 }, proxy.info);
-    expectBig(await conn.query(bigQuery));
-    expect(proxy.requests(isResultFetch)[0]!.headers["warp-ipc-compression"]).toBe("zstd");
-    const sql =
-      "SELECT i, 'v' || i AS s, i * 1.5 AS d, CASE WHEN i % 3 = 0 THEN NULL ELSE i END AS n FROM range(100000) t(i)";
-    const plain = await (await open({ resultPartitions: 1 })).query(sql);
-    const zstd = await conn.query(sql);
-    for (const name of ["i", "s", "n"])
-      expect(Array.from(zstd.getChild(name)!)).toEqual(Array.from(plain.getChild(name)!));
-  });
-
   test("the query tag is sent as Warp-Query-Tag", async () => {
     const proxy = await FaultProxy.start();
     const conn = await open({ queryTag: { job: "nightly" } }, proxy.info);

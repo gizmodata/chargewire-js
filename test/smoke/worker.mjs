@@ -7,6 +7,14 @@ export default {
     const conn = await connect({ url: env.WARP_URL, username: "warp_test", password: env.WARP_PASSWORD });
     try {
       const table = await conn.query("SELECT i FROM range(500000) t(i) ORDER BY i DESC");
+      // The LZ4 decoder is a lazily loaded module, bundled the way wrangler would.
+      const lz4 = conn.capabilities.has("ipc_compression_lz4_frame")
+        ? (
+            await conn.query("SELECT 'v' || i AS s FROM range(300000) t(i) ORDER BY i", undefined, {
+              ipcCompression: "lz4_frame",
+            })
+          ).get(299999).s
+        : "not offered";
       let streamed = 0;
       for await (const batch of conn.stream("SELECT * FROM range(300000)")) streamed += batch.numRows;
       let code = "";
@@ -15,7 +23,7 @@ export default {
       } catch (err) {
         code = err instanceof WarpSqlError ? err.code : String(err);
       }
-      return Response.json({ rows: table.numRows, first: Number(table.get(0).i), streamed, code });
+      return Response.json({ rows: table.numRows, first: Number(table.get(0).i), streamed, code, lz4 });
     } finally {
       await conn.close();
     }

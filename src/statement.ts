@@ -143,7 +143,7 @@ export class Execution {
       headers["Warp-Statement-Timeout"] = String(Math.max(1, Math.round(s.statementTimeoutMs)));
     }
     if (s.queryTag !== undefined) headers["Warp-Query-Tag"] = s.queryTag;
-    if (s.zstd) headers["Warp-IPC-Compression"] = "zstd";
+    if (s.ipcCodec !== undefined) headers["Warp-IPC-Compression"] = s.ipcCodec;
     if (s.resultPartitions > 1 && this.core.has(Capability.resultPartitions)) {
       headers["Warp-Result-Partitions"] = String(s.resultPartitions);
       if (s.resultOrder === "any") headers["Warp-Result-Order"] = "any";
@@ -234,7 +234,7 @@ export class Execution {
     if (rr.partition !== 0) query["partition"] = String(rr.partition);
     if (rr.fromBatch !== 0) query["from_batch"] = String(rr.fromBatch);
     const headers: Record<string, string> = { Accept: mediaTypeArrow };
-    if (this.settings.zstd) headers["Warp-IPC-Compression"] = "zstd";
+    if (this.settings.ipcCodec !== undefined) headers["Warp-IPC-Compression"] = this.settings.ipcCodec;
     return this.core.session.doHandle(this.sessionId!, "result", {
       method: "GET",
       path: `${this.#statementPath()}/result`,
