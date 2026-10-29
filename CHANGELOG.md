@@ -6,6 +6,11 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-10-29
+
+The client for the protocol under its new name, Chargewire: `@gizmodata/chargewire` on npm. It works
+with servers on either side of the rename.
+
 ### Changed
 
 - The client speaks the protocol under its new name, Chargewire: the package is
