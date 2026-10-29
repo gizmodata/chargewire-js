@@ -6,6 +6,14 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Changed
+
+- The client speaks the protocol under its new name, Chargewire: the package is
+  `@gizmodata/chargewire`, the error class `ChargewireError`, the URL scheme `chargewire://`
+  (default base path `/chargewire`) and the protocol headers `Chargewire-*`. Connection strings
+  saved before the rename keep working unchanged: their scheme and default base path are read as
+  the current ones, with nothing logged.
+
 ### Fixed
 
 - A query finishing during connection close no longer sends a late statement-delete request

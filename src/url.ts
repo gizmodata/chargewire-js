@@ -1,6 +1,7 @@
 // Licensed under the Apache License, Version 2.0.
 
 import { invalidArgument } from "./errors.js";
+import { adoptLegacyBasePath, adoptLegacyScheme } from "./legacy-names.js";
 
 /** What a URL scheme means: whether it is TLS by default, and its default port and base path. */
 export interface SchemeDefinition {
@@ -48,6 +49,7 @@ export function parseUrl(raw: string, schemes: SchemeMap = defaultSchemes): URL 
   if (typeof raw !== "string" || raw === "") {
     throw invalidArgument("a url is required, e.g. chargewire://host:port");
   }
+  raw = adoptLegacyScheme(raw, schemes);
   const match = /^([A-Za-z][A-Za-z0-9+.-]*):\/\//.exec(raw);
   if (!match) throw invalidArgument(`invalid url ${redact(raw)}: it needs a scheme, e.g. chargewire://host:port`);
   const scheme = match[1]!.toLowerCase();
@@ -94,7 +96,7 @@ export function parseUrl(raw: string, schemes: SchemeMap = defaultSchemes): URL 
   const port =
     explicit ??
     (url.port !== "" ? url.port : definition.defaultPort !== undefined ? String(definition.defaultPort) : "");
-  const path = url.pathname.replace(/\/+$/, "");
+  const path = adoptLegacyBasePath(url.pathname.replace(/\/+$/, ""), defaultBasePath);
   const base = new URL(`${tls ? "https" : "http"}://${url.host}`);
   base.port = port;
   base.pathname = path === "" ? (definition.defaultBasePath ?? defaultBasePath) : path;
