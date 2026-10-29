@@ -1,5 +1,7 @@
 // Licensed under the Apache License, Version 2.0.
 
+import { adoptLegacyErrorType } from "./legacy-names.js";
+
 /**
  * Error codes. The server's codes are spec §11's; a code the client does not know is
  * kept as the server sent it and judged by its HTTP status (§12). The client's own codes,
@@ -282,7 +284,7 @@ export function problemError(
     status,
     detail: str(doc.detail),
     title: str(doc.title),
-    type: str(doc.type),
+    type: adoptLegacyErrorType(str(doc.type)),
     sqlstate: str(doc.sqlstate),
     requestId: str(doc.request_id) ?? context.requestId ?? undefined,
     reason: str(doc.reason),

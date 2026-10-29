@@ -13,6 +13,12 @@ All notable changes to this project are documented in this file. The format is b
   (default base path `/chargewire`) and the protocol headers `Chargewire-*`. Connection strings
   saved before the rename keep working unchanged: their scheme and default base path are read as
   the current ones, with nothing logged.
+- The client also works with servers from before the rename, such as Hardcharger 2.0.x. When
+  nothing answers at the default base path (404), it looks for a pre-rename server at that
+  server's own base path and, if it finds one, speaks its spelling (paths, headers, error types,
+  column-default metadata, the browser sign-in fragment) for the rest of the connection. It
+  discovers once per connection, never falls back for a custom base path, logs nothing about it,
+  and a current server is never asked at the old path.
 
 ### Fixed
 

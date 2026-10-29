@@ -7,6 +7,7 @@
 
 import { ErrorCode, ChargewireError, invalidArgument, protocolError } from "./errors.js";
 import { HttpClient, type Logger, jsonBody, sleep } from "./http.js";
+import { legacyBrowserSignInFragmentKey } from "./legacy-names.js";
 import { platform } from "#platform";
 import type { TlsOptions } from "./platform/types.js";
 import type { DiscoveryDocument } from "./protocol.js";
@@ -62,7 +63,20 @@ export function browserSignInProvider(discovery: DiscoveryDocument): string | un
   return typeof name === "string" && name !== "" ? name : undefined;
 }
 
-async function clientFor(target: BrowserSignInTarget): Promise<HttpClient> {
+/**
+ * Servers (base URLs) found to be from before the protocol's rename, so that each later call
+ * of a sign-in (every poll) speaks their spelling at once instead of finding it again.
+ */
+const legacyServers = new Set<string>();
+const maxLegacyServers = 64;
+
+function noteServer(requested: URL, http: HttpClient): void {
+  if (!http.legacy || legacyServers.has(requested.href)) return;
+  if (legacyServers.size >= maxLegacyServers) legacyServers.delete(legacyServers.values().next().value!);
+  legacyServers.add(requested.href);
+}
+
+async function clientFor(target: BrowserSignInTarget): Promise<{ http: HttpClient; base: URL }> {
   if (target === null || typeof target !== "object") throw invalidArgument("browser sign-in takes an options object");
   if (target.tls !== undefined && target.fetch !== undefined) {
     throw invalidArgument("pass either tls or fetch: tls settings cannot be applied to a fetch of your own");
@@ -71,8 +85,9 @@ async function clientFor(target: BrowserSignInTarget): Promise<HttpClient> {
   const fetchFn =
     target.fetch ??
     (target.tls !== undefined ? await platform.tlsFetch(target.tls) : globalThis.fetch.bind<typeof fetch>(globalThis));
-  return new HttpClient({
+  const http = new HttpClient({
     base,
+    legacy: legacyServers.has(base.href),
     fetch: fetchFn,
     credentials: { kind: "static", token: "" },
     // Neither request may be repeated blindly: a flow is created anew, and a token is handed out once.
@@ -81,6 +96,7 @@ async function clientFor(target: BrowserSignInTarget): Promise<HttpClient> {
     logger: { debug: target.logger?.debug?.bind(target.logger), warn: target.logger?.warn?.bind(target.logger) },
     fetchCredentials: target.fetchCredentials,
   });
+  return { http, base };
 }
 
 /**
@@ -90,7 +106,7 @@ async function clientFor(target: BrowserSignInTarget): Promise<HttpClient> {
 export async function startBrowserSignIn(
   options: BrowserSignInTarget & { returnTo?: string },
 ): Promise<BrowserSignInFlow> {
-  const http = await clientFor(options);
+  const { http, base } = await clientFor(options);
   if (options.returnTo !== undefined && (typeof options.returnTo !== "string" || !options.returnTo.startsWith("/"))) {
     throw invalidArgument("returnTo must be a path on the server's own origin, starting with /");
   }
@@ -102,6 +118,7 @@ export async function startBrowserSignIn(
     anonymous: true,
     signal: options.signal,
   });
+  noteServer(base, http);
   const flow = {
     flowId: answer["flow_id"],
     pollSecret: answer["poll_secret"],
@@ -142,7 +159,7 @@ export async function pollBrowserSignIn(
   if (typeof flowId !== "string" || !/^[A-Za-z0-9._~-]+$/.test(flowId) || typeof pollSecret !== "string") {
     throw invalidArgument("flow needs the flowId and pollSecret startBrowserSignIn returned");
   }
-  const http = await clientFor(options);
+  const { http, base } = await clientFor(options);
   const answer = await http.json<Record<string, unknown>>({
     method: "POST",
     path: `/v1/auth/oauth/flows/${flowId}`,
@@ -151,6 +168,7 @@ export async function pollBrowserSignIn(
     anonymous: true,
     signal: options.signal,
   });
+  noteServer(base, http);
   switch (answer["state"]) {
     case "pending":
       return { state: "pending" };
@@ -221,9 +239,11 @@ export function takeBrowserSignInFlowId(url: string | URL): { flowId: string; ur
   const fragment = parsed.hash.startsWith("#") ? parsed.hash.slice(1) : parsed.hash;
   if (fragment === "") return undefined;
   const params = new URLSearchParams(fragment);
-  const flowId = params.get(browserSignInFragmentKey);
+  // A server from before the protocol's rename names the key in its own spelling.
+  const key = params.has(browserSignInFragmentKey) ? browserSignInFragmentKey : legacyBrowserSignInFragmentKey;
+  const flowId = params.get(key);
   if (flowId === null || !/^[A-Za-z0-9._~-]{1,128}$/.test(flowId)) return undefined;
-  params.delete(browserSignInFragmentKey);
+  params.delete(key);
   const rest = params.toString();
   parsed.hash = rest === "" ? "" : `#${rest}`;
   return { flowId, url: parsed.href };

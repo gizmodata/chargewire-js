@@ -363,6 +363,9 @@ async function discover(
     rttMs = performance.now() - start;
     doc = await decodeJSON<DiscoveryDocument>(resp, req);
   } catch (err) {
+    // Nothing at the default base path: maybe a server from before the protocol's rename.
+    const legacy = ChargewireError.is(err) && err.status === 404 ? await http.discoverLegacy(signal) : undefined;
+    if (legacy !== undefined) return { discovery: legacy.doc, rttMs: legacy.rttMs };
     if (ChargewireError.is(err, ErrorCode.clientProtocolError, ErrorCode.clientHttpError, ErrorCode.notFound)) {
       throw protocolError(`${http.base.href} does not describe a Chargewire server: ${(err as Error).message}`, err);
     }

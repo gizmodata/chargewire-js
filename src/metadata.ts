@@ -10,6 +10,7 @@ import {
 
 import type { Core } from "./core.js";
 import { protocolError } from "./errors.js";
+import { legacyColumnDefaultKey } from "./legacy-names.js";
 import { decodeJSON, mediaTypeArrow } from "./http.js";
 import { ScannedBody, incompleteStream, schemaFromIpc } from "./ipc.js";
 import type { ServerInfo } from "./protocol.js";
@@ -197,6 +198,7 @@ export class Metadata {
     const tables = await this.tables({ ...options, includeSchema: true });
     const match =
       options.columnNameFilterPattern === undefined ? undefined : likeToRegExp(options.columnNameFilterPattern);
+    const legacy = this.#core.http.legacy;
     const out: ColumnInfo[] = [];
     for (const row of tables as Iterable<Record<string, unknown>>) {
       const raw = row["table_schema"] as Uint8Array | null;
@@ -222,7 +224,7 @@ export class Metadata {
           precision: number("ARROW:FLIGHT:SQL:PRECISION"),
           scale: number("ARROW:FLIGHT:SQL:SCALE"),
           remarks: meta.get("ARROW:FLIGHT:SQL:REMARKS"),
-          defaultValue: meta.get("CHARGEWIRE:SQL:COLUMN_DEFAULT"),
+          defaultValue: meta.get(legacy ? legacyColumnDefaultKey : "CHARGEWIRE:SQL:COLUMN_DEFAULT"),
         });
       });
     }

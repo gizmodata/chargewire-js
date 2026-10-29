@@ -58,13 +58,15 @@ export async function freePort(): Promise<number> {
  * Launches the binary with a fresh password that contains ':' and '@' (credentials travel
  * as JSON fields, so nothing may split them, §4.1). `extra` takes chargewire-duckdb's flag
  * names; --tls-client-ca and --cors-origin are renamed to the server's own. `{port}` in an
- * argument becomes the server's port; `extraEnv` adds environment variables.
+ * argument becomes the server's port; `extraEnv` adds environment variables. `other` starts
+ * another binary with chargewire-duckdb's interface instead, its password in `passwordEnv`.
  */
 export async function launchServer(
   extra: string[] = [],
   extraEnv: Record<string, string> = {},
+  other?: { binary: string; passwordEnv: string },
 ): Promise<RunningServer> {
-  const binary = process.env[binaryEnv];
+  const binary = other?.binary ?? process.env[binaryEnv];
   if (binary === undefined || binary === "") {
     throw new Error(
       `set ${binaryEnv} to a Chargewire server binary (chargewire-duckdb or Hardcharger) to run the live tests`,
@@ -79,13 +81,13 @@ export async function launchServer(
     "127.0.0.1",
     "--port",
     String(port),
-    env("CHARGEWIRE_JS_TEST_SERVER_USERNAME_FLAG", "--username"),
+    other ? "--username" : env("CHARGEWIRE_JS_TEST_SERVER_USERNAME_FLAG", "--username"),
     testUsername,
   ];
   for (const arg of extra) {
     if (arg === "--tls-cert") scheme = "https";
-    if (arg === "--tls-client-ca") args.push(env("CHARGEWIRE_JS_TEST_SERVER_MTLS_FLAG", arg));
-    else if (arg === "--cors-origin") args.push(env("CHARGEWIRE_JS_TEST_SERVER_CORS_FLAG", arg));
+    if (arg === "--tls-client-ca") args.push(other ? arg : env("CHARGEWIRE_JS_TEST_SERVER_MTLS_FLAG", arg));
+    else if (arg === "--cors-origin") args.push(other ? arg : env("CHARGEWIRE_JS_TEST_SERVER_CORS_FLAG", arg));
     else args.push(arg.replaceAll("{port}", String(port)));
   }
   const output: string[] = [];
@@ -93,7 +95,7 @@ export async function launchServer(
     env: {
       ...process.env,
       ...extraEnv,
-      [env("CHARGEWIRE_JS_TEST_SERVER_PASSWORD_ENV", "CHARGEWIRE_DUCKDB_PASSWORD")]: password,
+      [other?.passwordEnv ?? env("CHARGEWIRE_JS_TEST_SERVER_PASSWORD_ENV", "CHARGEWIRE_DUCKDB_PASSWORD")]: password,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -128,6 +130,7 @@ export async function launchServer(
 
 const insecure = new Agent({ connect: { rejectUnauthorized: false } });
 
+/** Up once it answers HTTP at the default base path (a server from before the rename: with a 404). */
 async function waitUp(server: RunningServer, child: ChildProcess, mtls: boolean): Promise<void> {
   const deadline = Date.now() + 20_000;
   let last: unknown;
@@ -139,7 +142,7 @@ async function waitUp(server: RunningServer, child: ChildProcess, mtls: boolean)
         signal: AbortSignal.timeout(2000),
       });
       await resp.body?.cancel();
-      if (resp.status === 200) return;
+      if (resp.status === 200 || resp.status === 404) return;
       last = `GET /chargewire: ${resp.status}`;
     } catch (err) {
       // A server that requires client certificates refuses this handshake: anything but a

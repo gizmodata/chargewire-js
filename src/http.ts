@@ -1,7 +1,9 @@
 // Licensed under the Apache License, Version 2.0.
 
 import { ErrorCode, ChargewireError, protocolError, responseError, tokenRenewable } from "./errors.js";
-import { endpoint, redact } from "./url.js";
+import { adoptLegacyDiscovery, adoptLegacyResponse, legacyBase, legacyRequestHeaders } from "./legacy-names.js";
+import type { DiscoveryDocument } from "./protocol.js";
+import { defaultBasePath, endpoint, redact } from "./url.js";
 
 export const mediaTypeJSON = "application/json";
 export const mediaTypeArrow = "application/vnd.apache.arrow.stream";
@@ -98,6 +100,8 @@ export interface HttpClientConfig {
   logger: Logger;
   /** fetch's credentials mode (browsers: "include" sends the user's client certificate cross-origin). */
   fetchCredentials?: RequestCredentials | undefined;
+  /** The server is known to be from before the protocol's rename (see `legacy`). */
+  legacy?: boolean;
 }
 
 /** How long before its expiry a token is replaced, at most. */
@@ -108,7 +112,7 @@ const renewMarginMs = 2 * 60 * 1000;
  * concurrently. Retries what is safe to retry and keeps the access token fresh.
  */
 export class HttpClient {
-  readonly base: URL;
+  #base: URL;
   readonly logger: Logger;
   readonly #fetch: typeof fetch;
   readonly #credentials: Credentials;
@@ -118,9 +122,18 @@ export class HttpClient {
   #token: string | undefined;
   #renewAt: number | undefined; // when to replace the token; undefined when its lifetime is unknown
   #renewing: Promise<void> | undefined;
+  /** Talking to a server from before the protocol's rename, in its spelling. */
+  #legacy = false;
+  /**
+   * Whether the server's spelling is still open: only with the default base path, until the
+   * first answer from the server settles it.
+   */
+  #open: boolean;
 
   constructor(config: HttpClientConfig) {
-    this.base = config.base;
+    this.#base = config.base;
+    this.#open = config.base.pathname === defaultBasePath;
+    if (config.legacy === true && this.#open) this.#adopt();
     this.logger = config.logger;
     this.#fetch = config.fetch;
     this.#credentials = config.credentials;
@@ -128,6 +141,55 @@ export class HttpClient {
     this.#userAgent = config.userAgent;
     this.#fetchCredentials = config.fetchCredentials;
     if (config.credentials.kind === "static") this.#token = config.credentials.token;
+  }
+
+  /** The protocol's base URL on the server. */
+  get base(): URL {
+    return this.#base;
+  }
+
+  /**
+   * Whether the server is from before the protocol's rename: found at the old base path when
+   * the default one answered 404, and spoken to in its own spelling from then on.
+   */
+  get legacy(): boolean {
+    return this.#legacy;
+  }
+
+  #adopt(): void {
+    this.#legacy = true;
+    this.#open = false;
+    this.#base = legacyBase(this.#base);
+  }
+
+  /**
+   * After the discovery request (`path` "") answered 404 at the default base path: reads the
+   * old base path's discovery document, timed as `connect` times discovery. When it names
+   * the pre-rename protocol, this client speaks it from now on and the document comes back
+   * with the protocol named as it is now; otherwise (any failure included) undefined.
+   */
+  async discoverLegacy(signal?: AbortSignal): Promise<{ doc: DiscoveryDocument; rttMs: number } | undefined> {
+    if (!this.#open) return undefined;
+    this.#open = false;
+    const req = {
+      method: "GET",
+      path: "",
+      baseUrl: legacyBase(this.#base),
+      idempotent: true,
+      anonymous: true,
+      signal,
+    } as const;
+    try {
+      const start = performance.now();
+      const resp = await this.#request(req);
+      const rttMs = performance.now() - start;
+      const doc = adoptLegacyDiscovery(await decodeJSON<DiscoveryDocument>(resp, req));
+      if (doc === undefined) return undefined;
+      this.#adopt();
+      return { doc, rttMs };
+    } catch {
+      return undefined;
+    }
   }
 
   /** The token requests carry now (undefined before the first sign-in). */
@@ -151,6 +213,43 @@ export class HttpClient {
    * the error, with its reason.
    */
   async request(req: HttpRequest): Promise<Response> {
+    if (!this.#open) return this.#request(req);
+    try {
+      const resp = await this.#request(req);
+      this.#open = false;
+      return resp;
+    } catch (err) {
+      if (!(err instanceof ChargewireError) || err.status === undefined) throw err; // no answer: still open
+      if (!this.#open || err.status !== 404 || req.baseUrl !== undefined) {
+        this.#open = false;
+        throw err;
+      }
+      // A 404 for the discovery request is the caller's to follow up (connect: discoverLegacy).
+      if (req.path === "") throw err;
+      // Another path the server does not route (not a 404 about something it knows, such as a
+      // flow): ask the default base path whether this is a current server first, then the old one.
+      if (err.code !== ErrorCode.notFound && err.code !== ErrorCode.clientHttpError) {
+        this.#open = false;
+        throw err;
+      }
+      try {
+        await discard(
+          await this.#request({ method: "GET", path: "", idempotent: true, anonymous: true, signal: req.signal }),
+        );
+        this.#open = false; // a current server: the 404 stands
+        throw err;
+      } catch (probe) {
+        if (probe === err || !(probe instanceof ChargewireError) || probe.status !== 404) {
+          this.#open = false;
+          throw err;
+        }
+      }
+      if ((await this.discoverLegacy(req.signal)) === undefined || !replayable(req.body)) throw err;
+      return this.#request(req);
+    }
+  }
+
+  async #request(req: HttpRequest): Promise<Response> {
     let backoff = 200;
     const nextBackoff = (): number => {
       const wait = backoff * (0.75 + Math.random() * 0.5);
@@ -199,8 +298,9 @@ export class HttpClient {
   }
 
   async #send(req: HttpRequest, token: string | undefined): Promise<Response> {
-    const url = endpoint(req.baseUrl ?? this.base, req.path, req.query);
-    const headers = new Headers(req.headers);
+    const url = endpoint(req.baseUrl ?? this.#base, req.path, req.query);
+    let headers = new Headers(req.headers);
+    if (this.#legacy) headers = legacyRequestHeaders(headers);
     if (req.body) headers.set("Content-Type", req.body.contentType);
     if (!headers.has("Accept")) headers.set("Accept", mediaTypeJSON);
     if (token !== undefined) headers.set("Authorization", `Bearer ${token}`);
@@ -215,7 +315,8 @@ export class HttpClient {
     if (req.signal) init.signal = req.signal;
     const start = Date.now();
     req.onSend?.();
-    const resp = await this.#fetch.call(globalThis, url, init);
+    let resp = await this.#fetch.call(globalThis, url, init);
+    if (this.#legacy) resp = adoptLegacyResponse(resp);
     this.logger.debug?.("chargewire request", {
       method: req.method,
       path: req.path,
