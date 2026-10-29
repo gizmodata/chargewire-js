@@ -8,7 +8,7 @@ import {
   util,
 } from "apache-arrow";
 
-import { ErrorCode, WarpSqlError, protocolError } from "./errors.js";
+import { ErrorCode, ChargewireError, protocolError } from "./errors.js";
 import { abortError, mediaTypeArrow, sleep } from "./http.js";
 import { ScannedBody, incompleteStream } from "./ipc.js";
 import { isTerminal } from "./protocol.js";
@@ -130,7 +130,7 @@ export class PartReader implements BatchSource {
         await this.#attach(resp);
         return;
       } catch (err) {
-        if (WarpSqlError.is(err, ErrorCode.resultNotReady) && attempt < maxResumes) {
+        if (ChargewireError.is(err, ErrorCode.resultNotReady) && attempt < maxResumes) {
           // No schema yet: wait for the statement to make progress (§6.4).
           await exec.status(settleWaitS, this.#signal);
           continue;
@@ -171,7 +171,7 @@ export class PartReader implements BatchSource {
   /** Whether an error is the stream breaking off (a cut connection, a missing marker), which a resume may cure. */
   #breakage(err: unknown): boolean {
     if (this.#signal.aborted || this.#exec.cancelled) return true; // reported as the cancellation by #recover
-    if (err instanceof WarpSqlError) return err.code === ErrorCode.clientIncompleteStream;
+    if (err instanceof ChargewireError) return err.code === ErrorCode.clientIncompleteStream;
     return (
       err instanceof TypeError || (err instanceof Error && /terminated|network|socket|reset|aborted/i.test(err.message))
     );
@@ -331,7 +331,7 @@ export class PartitionedReader implements BatchSource {
     this.#failed = true;
     this.#failure = err;
     this.#stop.abort(
-      new WarpSqlError({ code: ErrorCode.statementCancelled, message: "another partition failed", cause: err }),
+      new ChargewireError({ code: ErrorCode.statementCancelled, message: "another partition failed", cause: err }),
     );
     for (const queue of this.#queues) queue.fail(err);
     this.#merged?.fail(err);
@@ -375,9 +375,9 @@ export class PartitionedReader implements BatchSource {
   async #shutdown(): Promise<void> {
     this.#done = true;
     if (!this.#stop.signal.aborted)
-      this.#stop.abort(new WarpSqlError({ code: ErrorCode.statementCancelled, message: "the result was closed" }));
+      this.#stop.abort(new ChargewireError({ code: ErrorCode.statementCancelled, message: "the result was closed" }));
     const closed =
-      this.#failure ?? new WarpSqlError({ code: ErrorCode.statementCancelled, message: "the result was closed" });
+      this.#failure ?? new ChargewireError({ code: ErrorCode.statementCancelled, message: "the result was closed" });
     for (const queue of this.#queues) queue.fail(closed);
     this.#merged?.fail(closed);
     // Cancel the downloads first: a pump may be waiting on a body that will not move.
@@ -392,6 +392,6 @@ export class PartitionedReader implements BatchSource {
 }
 
 /** Reports a signal's abort as the statement's cancellation. */
-export function cancelled(signal: AbortSignal, statementId: string | undefined): WarpSqlError {
+export function cancelled(signal: AbortSignal, statementId: string | undefined): ChargewireError {
   return abortError(signal, statementId);
 }

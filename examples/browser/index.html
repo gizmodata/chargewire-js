@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Warp SQL in the browser</title>
+    <title>Chargewire in the browser</title>
     <style>
       :root {
         color-scheme: light dark;
@@ -71,7 +71,7 @@
     </style>
   </head>
   <body>
-    <h1><span>Warp SQL</span> from a web page</h1>
+    <h1><span>Chargewire</span> from a web page</h1>
     <p>
       Plain <code>fetch</code> and Apache Arrow: the page signs in with a password in a JSON body (never in a URL), runs
       the query, and streams the result batch by batch. The server must allow this page's origin (CORS).
@@ -87,7 +87,7 @@
         autocomplete="current-password"
         required
       />
-      <textarea id="sql" aria-label="SQL">SELECT 42 AS answer, 'hello from Warp SQL' AS greeting</textarea>
+      <textarea id="sql" aria-label="SQL">SELECT 42 AS answer, 'hello from Chargewire' AS greeting</textarea>
       <div class="buttons">
         <button type="submit" id="run">Run</button>
         <button type="button" id="cancel">Cancel</button>

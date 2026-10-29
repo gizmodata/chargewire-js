@@ -1,4 +1,4 @@
-name: warp-sql-js-release
+name: chargewire-js-release
 
 # On a vX.Y.Z tag: the full suite (ci.yml: lint, typecheck, unit tests on every Node, live
 # tests, Deno/Bun/workerd and browser smoke tests) runs on the tagged commit itself, then a
@@ -6,9 +6,9 @@ name: warp-sql-js-release
 #
 # npm publishing is prepared but off. It uses npm trusted publishing (OIDC: no npm token is
 # stored anywhere) and runs only when the repository variable NPM_PUBLISH_ENABLED is "true".
-# Before turning it on, on npmjs.com: create the @gizmodata/warp-sql package (or publish
+# Before turning it on, on npmjs.com: create the @gizmodata/chargewire package (or publish
 # 0.0.0 once by hand), then under its Settings > Trusted publishing add GitHub Actions with
-# organization gizmodata, repository warp-sql-js, workflow release.yml, environment npm.
+# organization gizmodata, repository chargewire-js, workflow release.yml, environment npm.
 # Create the `npm` environment in this repository (with required reviewers, if wanted).
 
 on:
@@ -86,5 +86,5 @@ jobs:
       # public, as package.json's publishConfig says.
       - name: Publish
         env:
-          WARP_SQL_JS_RELEASE: "1"
+          CHARGEWIRE_JS_RELEASE: "1"
         run: npm publish --access public

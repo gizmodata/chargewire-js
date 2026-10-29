@@ -5,7 +5,7 @@
 
 import { describe, expect, test } from "vitest";
 
-import { ErrorCode, WarpSqlError } from "../../src/index.js";
+import { ErrorCode, ChargewireError } from "../../src/index.js";
 import {
   FaultProxy,
   expectCode,
@@ -34,7 +34,7 @@ describe("cancel", () => {
     expect(await within(blocked, 2000)).toBe("pending");
     controller.abort();
     const err = await long;
-    expect(WarpSqlError.is(err, ErrorCode.statementCancelled)).toBe(true);
+    expect(ChargewireError.is(err, ErrorCode.statementCancelled)).toBe(true);
     expect(await within(blocked, 30_000)).toBe(42);
   });
 

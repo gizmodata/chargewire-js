@@ -1,5 +1,5 @@
 // Live-server tests: test/live/global-setup.ts starts the server named by
-// WARP_SQL_JS_TEST_SERVER_BINARY and fails the run without it, or when no test reached it.
+// CHARGEWIRE_JS_TEST_SERVER_BINARY and fails the run without it, or when no test reached it.
 import { fileURLToPath } from "node:url";
 
 import { defineConfig } from "vitest/config";

@@ -3,7 +3,7 @@
 import { type RecordBatch, type Schema, Table } from "apache-arrow";
 
 import type { Core, OpenStream } from "./core.js";
-import { ErrorCode, WarpSqlError } from "./errors.js";
+import { ErrorCode, ChargewireError } from "./errors.js";
 import { batchBytes } from "./ipc.js";
 import type { Rows } from "./statement.js";
 
@@ -25,7 +25,7 @@ export class ResultStream implements AsyncIterableIterator<RecordBatch, undefine
   readonly #buffer: RecordBatch[] = [];
   #done = false;
   #error: unknown;
-  #dropped: WarpSqlError | undefined;
+  #dropped: ChargewireError | undefined;
   #registered = false;
   #ended = false;
 
@@ -167,7 +167,7 @@ export class ResultStream implements AsyncIterableIterator<RecordBatch, undefine
         return;
       }
       // Too big to hold: drop the rest, and say so when the reader gets there.
-      this.#dropped = new WarpSqlError({
+      this.#dropped = new ChargewireError({
         code: ErrorCode.clientResultBufferExceeded,
         statementId: rows.statementId,
         message:

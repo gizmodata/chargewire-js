@@ -1,15 +1,15 @@
 // Licensed under the Apache License, Version 2.0.
 //
 // Browser sign-in (§4.3) against a real server and a mock identity provider (idp.ts). The
-// server's flags are a template, WARP_SQL_JS_TEST_SERVER_OAUTH_ARGS (default: warp-duckdb's),
+// server's flags are a template, CHARGEWIRE_JS_TEST_SERVER_OAUTH_ARGS (default: chargewire-duckdb's),
 // with {issuer}, {client_id}, {identity} and {port}; the client secret goes in the variable
-// WARP_SQL_JS_TEST_SERVER_OAUTH_SECRET_ENV names (default WARP_DUCKDB_OAUTH_CLIENT_SECRET).
+// CHARGEWIRE_JS_TEST_SERVER_OAUTH_SECRET_ENV names (default CHARGEWIRE_DUCKDB_OAUTH_CLIENT_SECRET).
 // For Hardcharger:
 //
-//   WARP_SQL_JS_TEST_SERVER_OAUTH_ARGS='--token-allowed-issuer {issuer} --token-allowed-audience {client_id}
+//   CHARGEWIRE_JS_TEST_SERVER_OAUTH_ARGS='--token-allowed-issuer {issuer} --token-allowed-audience {client_id}
 //     --token-default-role admin --token-authorized-emails {identity} --oauth-client-id {client_id}
 //     --oauth-base-url http://127.0.0.1:{port}'
-//   WARP_SQL_JS_TEST_SERVER_OAUTH_SECRET_ENV=HARDCHARGER_OAUTH_CLIENT_SECRET
+//   CHARGEWIRE_JS_TEST_SERVER_OAUTH_SECRET_ENV=HARDCHARGER_OAUTH_CLIENT_SECRET
 
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 
@@ -32,7 +32,7 @@ let server: RunningServer;
 beforeAll(async () => {
   idp = await startIdp();
   const template = env(
-    "WARP_SQL_JS_TEST_SERVER_OAUTH_ARGS",
+    "CHARGEWIRE_JS_TEST_SERVER_OAUTH_ARGS",
     "--oauth-issuer {issuer} --oauth-client-id {client_id} --oauth-identities {identity}",
   );
   const args = template
@@ -40,7 +40,7 @@ beforeAll(async () => {
     .filter((a) => a !== "")
     .map((a) => a.replace("{issuer}", idp.issuer).replace("{client_id}", idp.clientId).replace("{identity}", identity));
   server = await launchServer(args, {
-    [env("WARP_SQL_JS_TEST_SERVER_OAUTH_SECRET_ENV", "WARP_DUCKDB_OAUTH_CLIENT_SECRET")]: idp.clientSecret,
+    [env("CHARGEWIRE_JS_TEST_SERVER_OAUTH_SECRET_ENV", "CHARGEWIRE_DUCKDB_OAUTH_CLIENT_SECRET")]: idp.clientSecret,
   });
 });
 
@@ -54,7 +54,7 @@ async function browse(authorizeUrl: string): Promise<Response> {
   const atIdp = await fetch(authorizeUrl, { redirect: "manual" });
   expect(atIdp.status).toBe(302);
   const callback = atIdp.headers.get("location")!;
-  expect(callback.startsWith(`http://${server.host}/warp/`)).toBe(true);
+  expect(callback.startsWith(`http://${server.host}/chargewire/`)).toBe(true);
   return fetch(callback, { redirect: "manual" });
 }
 
@@ -131,7 +131,7 @@ describe("browser sign-in (live)", () => {
     expect(redirect.status).toBe(303);
     const location = new URL(redirect.headers.get("location")!, `http://${server.host}`);
     expect(location.pathname + location.search).toBe("/ui/?tab=1");
-    expect(location.hash).toMatch(/^#warp_oauth_flow=[A-Za-z0-9._~-]+$/);
+    expect(location.hash).toMatch(/^#chargewire_oauth_flow=[A-Za-z0-9._~-]+$/);
     let shown = "";
     const result = await completeBrowserRedirectSignIn({
       ...target,

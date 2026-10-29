@@ -1,17 +1,17 @@
 {
-  "name": "@gizmodata/warp-sql",
+  "name": "@gizmodata/chargewire",
   "version": "1.0.0",
-  "description": "JavaScript/TypeScript client for the Warp SQL protocol: SQL over plain HTTP with Apache Arrow results, for Node, browsers, Deno, Bun and edge runtimes.",
+  "description": "JavaScript/TypeScript client for the Chargewire protocol: SQL over plain HTTP with Apache Arrow results, for Node, browsers, Deno, Bun and edge runtimes.",
   "author": "GizmoData LLC",
   "license": "Apache-2.0",
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/gizmodata/warp-sql-js.git"
+    "url": "git+https://github.com/gizmodata/chargewire-js.git"
   },
-  "homepage": "https://github.com/gizmodata/warp-sql-js#readme",
+  "homepage": "https://github.com/gizmodata/chargewire-js#readme",
   "keywords": [
-    "warp-sql",
+    "chargewire",
     "hardcharger",
     "gizmodata",
     "arrow",

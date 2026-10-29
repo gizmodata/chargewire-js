@@ -1,11 +1,11 @@
 <p align="center">
-  <a href="https://github.com/gizmodata/warp-sql">
-    <img src="docs/assets/warp-sql-js-banner.svg" alt="Warp SQL JS: fetch + Arrow, from Node, browsers, Deno, Bun and the edge. By GizmoData." width="100%">
+  <a href="https://github.com/gizmodata/chargewire">
+    <img src="docs/assets/chargewire-js-banner.svg" alt="Chargewire JS: fetch + Arrow, from Node, browsers, Deno, Bun and the edge. By GizmoData." width="100%">
   </a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/gizmodata/warp-sql"><img src="https://img.shields.io/badge/protocol-Warp%20SQL%201.0.0-31a8db.svg" alt="Warp SQL protocol"></a>
+  <a href="https://github.com/gizmodata/chargewire"><img src="https://img.shields.io/badge/protocol-Chargewire%201.0.0-31a8db.svg" alt="Chargewire protocol"></a>
   <img src="https://img.shields.io/badge/TypeScript-ESM%20%2B%20CJS-3178C6.svg?logo=typescript&logoColor=white" alt="TypeScript, ESM and CJS">
   <a href="https://arrow.apache.org/docs/js/"><img src="https://img.shields.io/badge/results-Apache%20Arrow-f15a24.svg" alt="Apache Arrow results"></a>
   <img src="https://img.shields.io/badge/Node-%E2%89%A522.19-339933.svg?logo=node.js&logoColor=white" alt="Node 22.19 or later">
@@ -17,16 +17,16 @@
   <a href="https://gizmodata.com"><img src="https://img.shields.io/badge/by-GizmoData-f15a24.svg" alt="GizmoData"></a>
 </p>
 
-<h3 align="center">Query any Warp SQL server from JavaScript with plain <code>fetch</code>. Get Arrow back.</h3>
+<h3 align="center">Query any Chargewire server from JavaScript with plain <code>fetch</code>. Get Arrow back.</h3>
 
 ---
 
 ## 🔌 What is it?
 
-`@gizmodata/warp-sql` is a TypeScript client for the [Warp SQL protocol](https://github.com/gizmodata/warp-sql):
+`@gizmodata/chargewire` is a TypeScript client for the [Chargewire protocol](https://github.com/gizmodata/chargewire):
 SQL over plain HTTP, with results, parameters and uploads as Apache Arrow IPC streams. It
-talks to any Warp SQL server, such as [Hardcharger](https://github.com/gizmodata/hardcharger) or
-the reference server `warp-duckdb`.
+talks to any Chargewire server, such as [Hardcharger](https://github.com/gizmodata/hardcharger) or
+the reference server `chargewire-duckdb`.
 
 - 🌍 **Runs everywhere `fetch` does:** Node, browsers, Deno, Bun and Cloudflare Workers. No native
   code, no ADBC, no gRPC.
@@ -39,13 +39,13 @@ the reference server `warp-duckdb`.
 - ✅ **Never a short table:** a result stream that ends without Arrow's end-of-stream marker
   throws; it is never taken for a complete result.
 
-> **Status: 1.0.0, for Warp SQL protocol 1.0.0.** Tested against `warp-duckdb` (warp-sql main) and
+> **Status: 1.0.0, for Chargewire protocol 1.0.0.** Tested against `chargewire-duckdb` (chargewire main) and
 > Hardcharger 2.0.0.
 
 ## 📥 Install
 
 ```bash
-npm install @gizmodata/warp-sql apache-arrow
+npm install @gizmodata/chargewire apache-arrow
 ```
 
 `apache-arrow` (21.2 or later) is a peer dependency, so your application and the client share one
@@ -57,12 +57,12 @@ From [examples/node/quickstart.mjs](examples/node/quickstart.mjs), run against b
 
 ```js
 import { tableFromArrays } from "apache-arrow";
-import { WarpSqlError, connect } from "@gizmodata/warp-sql";
+import { ChargewireError, connect } from "@gizmodata/chargewire";
 
 const conn = await connect({
-  url: process.env.WARP_URL,
-  username: process.env.WARP_USER,
-  password: process.env.WARP_PASSWORD,
+  url: process.env.CHARGEWIRE_URL,
+  username: process.env.CHARGEWIRE_USER,
+  password: process.env.CHARGEWIRE_PASSWORD,
 });
 
 // A query, with bind parameters: an Arrow Table back.
@@ -85,7 +85,7 @@ try {
     signal: AbortSignal.timeout(1000),
   });
 } catch (err) {
-  if (!(err instanceof WarpSqlError)) throw err;
+  if (!(err instanceof ChargewireError)) throw err;
   console.log(`${err.code}: ${err.message}`);
 }
 
@@ -119,7 +119,7 @@ for await (const batch of stream) {
 Run it against a local server that allows the page's origin:
 
 ```bash
-WARP_DUCKDB_PASSWORD=… warp-duckdb --port 31337 --username joe --cors-origin http://localhost:5173
+CHARGEWIRE_DUCKDB_PASSWORD=… chargewire-duckdb --port 31337 --username joe --cors-origin http://localhost:5173
 # or: HARDCHARGER_ADMIN_PASSWORD=… hardcharger-server --port 31337 --admin-username joe --cors-origins http://localhost:5173
 npm run build && npm run example:browser   # http://localhost:5173/?url=http://127.0.0.1:31337&username=joe
 ```
@@ -141,19 +141,19 @@ Miniflare).
 
 ## 🔗 Connecting
 
-| URL                              | Meaning                                                      |
-| -------------------------------- | ------------------------------------------------------------ |
-| `warp://host:port`               | HTTPS, base path `/warp` (the default)                       |
-| `warp://host:port/custom/prefix` | HTTPS, the server mounts the protocol under `/custom/prefix` |
-| `warp://host:port?tls=false`     | Plain HTTP (development, loopback)                           |
-| `https://host:port[/prefix]`     | Same as `warp://`                                            |
-| `http://host:port[/prefix]`      | Plain HTTP                                                   |
+| URL                                    | Meaning                                                      |
+| -------------------------------------- | ------------------------------------------------------------ |
+| `chargewire://host:port`               | HTTPS, base path `/chargewire` (the default)                 |
+| `chargewire://host:port/custom/prefix` | HTTPS, the server mounts the protocol under `/custom/prefix` |
+| `chargewire://host:port?tls=false`     | Plain HTTP (development, loopback)                           |
+| `https://host:port[/prefix]`           | Same as `chargewire://`                                      |
+| `http://host:port[/prefix]`            | Plain HTTP                                                   |
 
 A URL with credentials in it is refused. For Hardcharger™, use
 [`@gizmodata/hardcharger`](https://github.com/gizmodata/hardcharger-js): this client with
 `hardcharger://` URLs (port 31337 unless the URL names one) and Hardcharger names for its classes,
 as a thin package that depends on this one and re-exports it. This package stays the generic
-client for any Warp SQL server. Another wrapper can add a scheme of its own by passing
+client for any Chargewire server. Another wrapper can add a scheme of its own by passing
 `schemes: { ...defaultSchemes, myscheme: { tls: true, tlsParameter: true, defaultPort: 4000 } }`.
 
 `connect` takes exactly one credential:
@@ -161,7 +161,7 @@ client for any Warp SQL server. Another wrapper can add a scheme of its own by p
 | Option                                  | Grant                                                                                                                |
 | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | `username`, `password`                  | `password` (§4.1); any character, `:` and `@` included                                                               |
-| `token`                                 | A Warp SQL access token issued elsewhere, used as is and never renewed                                               |
+| `token`                                 | A Chargewire access token issued elsewhere, used as is and never renewed                                             |
 | `tokenProvider`                         | A function returning a fresh access token, called at connect and whenever the server refuses the current one         |
 | `subjectToken`                          | An identity provider's token (string or function) for the `token_exchange` grant (SSO)                               |
 | `authType: "client_certificate"`        | The TLS client certificate alone, no password (§4.4); see [Client certificate sign-in](#-client-certificate-sign-in) |
@@ -184,7 +184,7 @@ Other `connect` options:
 ## 🔐 Client certificate sign-in
 
 On a server that offers it (capability `mtls_identity`: Hardcharger with
-`mtls_certificate_sign_in`, warp-duckdb with `--mtls-certificate-sign-in`), the TLS client
+`mtls_certificate_sign_in`, chargewire-duckdb with `--mtls-certificate-sign-in`), the TLS client
 certificate is the credential: the client sends the `client_certificate` grant with no password,
 and the server maps the certificate's identity (by default its e-mail SAN) to a user. In Node, Deno
 and Bun the certificate is `tls.cert` and `tls.key`:
@@ -192,10 +192,10 @@ and Bun the certificate is `tls.cert` and `tls.key`:
 ```js
 import { readFileSync } from "node:fs";
 
-import { WarpSqlError, connect } from "@gizmodata/warp-sql";
+import { ChargewireError, connect } from "@gizmodata/chargewire";
 
 const conn = await connect({
-  url: "warp://db.example.com:31337",
+  url: "chargewire://db.example.com:31337",
   authType: "client_certificate",
   tls: {
     ca: readFileSync("ca.pem", "utf8"),
@@ -222,7 +222,7 @@ const conn = await connect({ url: "https://db.example.com:31337", authType: "cli
 ```
 
 On another origin than the server's, that needs the server to allow credentials for the page's
-origin (`Access-Control-Allow-Credentials`, spec §9.5), which the warp-sql SDK does from its
+origin (`Access-Control-Allow-Credentials`, spec §9.5), which the chargewire SDK does from its
 `feat/cors-credentials` branch on (not yet in a released server), and certificates optional at the
 handshake, because CORS preflights carry no credentials. A page served by the server itself
 (Hardcharger's UI) needs neither.
@@ -241,7 +241,7 @@ The server's refusals keep their spec codes (§4.4), each a `401`:
 try {
   await connect({ url, authType: "client_certificate", tls: { ca, cert: otherCert, key: otherKey } });
 } catch (err) {
-  if (WarpSqlError.is(err, "unknown_certificate_identity")) console.log(err.code, err.status); // ... 401
+  if (ChargewireError.is(err, "unknown_certificate_identity")) console.log(err.code, err.status); // ... 401
 }
 ```
 
@@ -258,10 +258,10 @@ From Node or a desktop app, `openUrl` opens (or shows) the sign-in URL:
 
 ```ts
 import { exec } from "node:child_process";
-import { connect } from "@gizmodata/warp-sql";
+import { connect } from "@gizmodata/chargewire";
 
 const conn = await connect({
-  url: "warp://db.example.com:31337",
+  url: "chargewire://db.example.com:31337",
   authType: "oauth_browser",
   openUrl: (url) => void exec(`open ${JSON.stringify(url)}`), // or print it for the person
   browserSignInTimeoutMs: 300_000,
@@ -275,11 +275,11 @@ without a connection and returns `{ accessToken, expiresIn }`.
 A web page goes to the provider and comes back to itself (`returnTo`, a path on the server's
 own origin): `beginBrowserRedirectSignIn` keeps the flow's poll secret in this tab's
 `sessionStorage` and sends the browser away; on the way back, `completeBrowserRedirectSignIn`
-reads the flow id from the URL fragment (`#warp_oauth_flow=…`), removes it from the address
+reads the flow id from the URL fragment (`#chargewire_oauth_flow=…`), removes it from the address
 bar and collects the token. A flow this tab did not start is ignored.
 
 ```ts
-import { beginBrowserRedirectSignIn, completeBrowserRedirectSignIn, connect } from "@gizmodata/warp-sql";
+import { beginBrowserRedirectSignIn, completeBrowserRedirectSignIn, connect } from "@gizmodata/chargewire";
 
 const url = "https://db.example.com:31337";
 const signedIn = await completeBrowserRedirectSignIn({ url }); // undefined unless coming back
@@ -292,7 +292,7 @@ if (signedIn === undefined) {
 
 The steps are also there one by one: `startBrowserSignIn` (→ `flowId`, `pollSecret`,
 `authorizeUrl`, `pollIntervalS`, `expiresAt`), `pollBrowserSignIn` (→ `pending` or
-`complete`) and `takeBrowserSignInFlowId(url)`. A failed sign-in throws a `WarpSqlError` with
+`complete`) and `takeBrowserSignInFlowId(url)`. A failed sign-in throws a `ChargewireError` with
 the flow's code: `access_denied` (the person or the provider refused), `invalid_credentials`
 (the server does not let that user in), `identity_provider_error`; a flow that expired or was
 already collected, or a wrong poll secret, is `flow_not_found`, and a `returnTo` that is not a
@@ -349,10 +349,10 @@ Statement options, per call or as `connect` defaults:
   partitions (4 in browsers), reads them all at once over separate connections with two batches of
   buffering each, and merges them: round robin for `preserve` (so `ORDER BY` holds), as they arrive
   for `any`. Any partition failing fails the whole result; cancelling or closing stops them all. A
-  server without the capability never sees the headers. A split answer without `Warp-Result-Order`
+  server without the capability never sees the headers. A split answer without `Chargewire-Result-Order`
   (or a document without `partition_order`) is a `client_protocol_error`, never guessed. Partitions
   on other servers (§6.2, capability `result_locations`) are read at once with the rest; the client
-  sends `Warp-Result-Locations: remote` only to a server that lists the capability.
+  sends `Chargewire-Result-Locations: remote` only to a server that lists the capability.
 - **Retries.** Every submit, prepared execute and ingest carries an `Idempotency-Key`, so a request
   whose answer was lost is sent again without running twice (§6.7). Reads, deletes and keyed writes
   are retried after transport errors and 421/429/502/503/504, honouring `Retry-After`. Commit and
@@ -390,7 +390,7 @@ Statement options, per call or as `connect` defaults:
 
 ## ⚠️ Errors
 
-Every error is a `WarpSqlError` with a stable `code`: the server's problem-document code (§11),
+Every error is a `ChargewireError` with a stable `code`: the server's problem-document code (§11),
 or one of the client's own, which begin with `client_` (servers never send those). Decide on
 `code`, never on `title` or `detail`. It also carries `status`, `sqlstate`, `detail`, `requestId`,
 `statementId` (also on a statement that failed or was cancelled before its submit was answered),
@@ -400,7 +400,7 @@ or one of the client's own, which begin with `client_` (servers never send those
 try {
   await conn.query("SELEC 1");
 } catch (err) {
-  if (WarpSqlError.is(err, "sql_error")) console.log(err.status, err.requestId, err.detail);
+  if (ChargewireError.is(err, "sql_error")) console.log(err.status, err.requestId, err.detail);
 }
 ```
 
@@ -408,7 +408,7 @@ try {
 | ------------------------------- | ------------------------------------------------------------------------------- |
 | `client_invalid_argument`       | An argument the client refuses before sending anything                          |
 | `client_transport_error`        | No HTTP answer (refused, reset, a certificate the client does not trust)        |
-| `client_protocol_error`         | An answer that does not follow the protocol, or a server that is not Warp SQL   |
+| `client_protocol_error`         | An answer that does not follow the protocol, or a server that is not Chargewire |
 | `client_http_error`             | An error answer without a problem document (a proxy's page); see `status`       |
 | `client_incomplete_stream`      | A result stream ended without its end-of-stream marker and could not be resumed |
 | `client_result_buffer_exceeded` | A stream set aside for another request did not fit `resultBufferBytes`          |
@@ -421,7 +421,7 @@ certificate at the handshake, §4.4) is reported with that code, not as `client_
 ## 🗜️ Compression
 
 With `ipcCompression` the server may compress result buffers with Arrow's own IPC compression
-(§8.2). The client sends the chosen codec in `Warp-IPC-Compression` on every request that returns
+(§8.2). The client sends the chosen codec in `Chargewire-IPC-Compression` on every request that returns
 Arrow, each partition's included, and uses a codec only when the server lists its capability
 (`ipc_compression_lz4_frame`, `ipc_compression_zstd`); otherwise results come uncompressed.
 
@@ -432,7 +432,7 @@ Arrow, each partition's included, and uses a codec only when the server lists it
 | `zstd`      | Arrow's ZSTD: smaller, slower to decode. For links where bandwidth is scarcer than CPU       |
 | `auto`      | `lz4_frame` when the discovery request's round trip is under 10 ms, else `zstd` (as Go ADBC) |
 
-`auto` times `GET /warp` to its response headers. That first request also opens the connection
+`auto` times `GET /chargewire` to its response headers. That first request also opens the connection
 (TCP and TLS handshakes), so when it takes 10 ms or more, the client times one more discovery request
 on the open connection and keeps the shorter time.
 
@@ -468,19 +468,19 @@ npm run check:package   # publint and are-the-types-wrong
 npm run size            # the browser bundle's size
 ```
 
-The live suites start the server binary named by `WARP_SQL_JS_TEST_SERVER_BINARY` on free ports,
+The live suites start the server binary named by `CHARGEWIRE_JS_TEST_SERVER_BINARY` on free ports,
 with a password containing `:` and `@`: one shared plain-HTTP server, plus servers of their own for
 TLS, mutual TLS, certificate sign-in (test/live/mtls.test.ts: every certificate code but
 `certificate_revoked`, which the unit tests cover) and short-lived tokens. Without the variable they fail; they never skip, and a run in
 which no test reached a server fails too.
 
 ```bash
-export WARP_SQL_JS_TEST_SERVER_BINARY=/path/to/warp-duckdb
+export CHARGEWIRE_JS_TEST_SERVER_BINARY=/path/to/chargewire-duckdb
 npm run test:live       # Node (vitest), 105 tests
 npm run test:smoke      # Node, Deno, Bun and workerd (needs a build)
 npm run test:browser    # Chromium and WebKit (Playwright; needs a build)
 npm run test:browser:mtls  # certificate sign-in from a page on another origin (needs a build, and a
-                           # server that allows CORS credentials: warp-sql feat/cors-credentials)
+                           # server that allows CORS credentials: chargewire feat/cors-credentials)
 ```
 
 For Hardcharger, name its flags and password variable
@@ -488,7 +488,7 @@ For Hardcharger, name its flags and password variable
 
 ```bash
 set -a; . scripts/live-hardcharger.env.example; set +a
-export WARP_SQL_JS_TEST_SERVER_BINARY=/path/to/hardcharger-server
+export CHARGEWIRE_JS_TEST_SERVER_BINARY=/path/to/hardcharger-server
 ```
 
 Negative tests assert the error code, each beside a positive twin. Some prove their oracle: a
@@ -501,7 +501,7 @@ CI runs all of it but `test:browser:mtls` against the Hardcharger image of its m
 
 ## 🐛 Known server issue
 
-Servers built on the warp-sql C++ SDK (warp-duckdb, Hardcharger 0.2) verify client certificates
+Servers built on the chargewire C++ SDK (chargewire-duckdb, Hardcharger 0.2) verify client certificates
 without an OpenSSL session id context, so a resumed TLS session fails ("tlsv1 alert internal
 error") whenever mutual TLS is on. Node clients resume sessions by default, so every connection after
 the first would fail. With a client certificate, this client turns session resumption off.

@@ -149,7 +149,7 @@ export interface ProblemDocument {
   [key: string]: unknown;
 }
 
-export interface WarpSqlErrorInit {
+export interface ChargewireErrorInit {
   code: string;
   message?: string;
   status?: number;
@@ -172,8 +172,8 @@ export interface WarpSqlErrorInit {
  * Every error the client raises. `code` is the stable, machine-readable part: the
  * server's problem-document code (§11) or one of the client codes in {@link ErrorCode}.
  */
-export class WarpSqlError extends Error {
-  override readonly name = "WarpSqlError";
+export class ChargewireError extends Error {
+  override readonly name = "ChargewireError";
   /** The error code, e.g. `sql_error` or `statement_cancelled`. */
   readonly code: string;
   /** The HTTP status of the answer that carried the error, when there was one. */
@@ -184,7 +184,7 @@ export class WarpSqlError extends Error {
   readonly type: string | undefined;
   /** The SQL standard's five-character SQLSTATE, when the server sent one. */
   readonly sqlstate: string | undefined;
-  /** The server's id for the request (`Warp-Request-Id`), also in its logs. */
+  /** The server's id for the request (`Chargewire-Request-Id`), also in its logs. */
   readonly requestId: string | undefined;
   /** On `invalid_token` (§4.2) and `session_ended` (§5.6): why. A value the client doesn't know is a generic one (§12). */
   readonly reason: string | undefined;
@@ -201,7 +201,7 @@ export class WarpSqlError extends Error {
   /** The session the client opened in its place, if it did (the connection is usable again). */
   readonly replacementSessionId: string | undefined;
 
-  constructor(init: WarpSqlErrorInit) {
+  constructor(init: ChargewireErrorInit) {
     super(init.message ?? describe(init), init.cause === undefined ? undefined : { cause: init.cause });
     this.code = init.code;
     this.status = init.status;
@@ -219,17 +219,17 @@ export class WarpSqlError extends Error {
     this.replacementSessionId = init.replacementSessionId;
   }
 
-  /** Whether `err` is a WarpSqlError, and (when given) has one of the codes. */
-  static is(err: unknown, ...codes: string[]): err is WarpSqlError {
-    return err instanceof WarpSqlError && (codes.length === 0 || codes.includes(err.code));
+  /** Whether `err` is a ChargewireError, and (when given) has one of the codes. */
+  static is(err: unknown, ...codes: string[]): err is ChargewireError {
+    return err instanceof ChargewireError && (codes.length === 0 || codes.includes(err.code));
   }
 
   /** A copy with another message and extra fields, keeping the rest. */
-  with(changes: Partial<WarpSqlErrorInit>): WarpSqlError {
-    return new WarpSqlError({ ...this.init(), ...changes });
+  with(changes: Partial<ChargewireErrorInit>): ChargewireError {
+    return new ChargewireError({ ...this.init(), ...changes });
   }
 
-  private init(): WarpSqlErrorInit {
+  private init(): ChargewireErrorInit {
     return {
       code: this.code,
       message: this.message,
@@ -251,7 +251,7 @@ export class WarpSqlError extends Error {
   }
 }
 
-function describe(init: WarpSqlErrorInit): string {
+function describe(init: ChargewireErrorInit): string {
   let text = init.detail || init.title || "request failed";
   const extra = [init.code];
   if (init.reason) extra.push(`reason: ${init.reason}`);
@@ -272,12 +272,12 @@ export function problemError(
     statementId?: string | null;
     cancelReason?: string;
   } = {},
-): WarpSqlError {
+): ChargewireError {
   const doc: ProblemDocument = problem ?? {};
   const status = typeof doc.status === "number" && doc.status > 0 ? doc.status : context.status;
   // A problem document without a code does not follow the protocol (§11).
   const code = typeof doc.code === "string" && doc.code !== "" ? doc.code : ErrorCode.clientProtocolError;
-  return new WarpSqlError({
+  return new ChargewireError({
     code,
     status,
     detail: str(doc.detail),
@@ -295,8 +295,8 @@ export function problemError(
 
 const maxProblemBytes = 1 << 20;
 
-/** Turns an error answer into a WarpSqlError, whatever its body is. */
-export async function responseError(resp: Response): Promise<WarpSqlError> {
+/** Turns an error answer into a ChargewireError, whatever its body is. */
+export async function responseError(resp: Response): Promise<ChargewireError> {
   let text = "";
   try {
     text = await resp.text();
@@ -305,9 +305,9 @@ export async function responseError(resp: Response): Promise<WarpSqlError> {
   }
   if (text.length > maxProblemBytes) text = text.slice(0, maxProblemBytes);
   const retryAfterMs = parseRetryAfter(resp.headers.get("retry-after"));
-  const requestId = resp.headers.get("warp-request-id");
+  const requestId = resp.headers.get("chargewire-request-id");
   // A statement that failed or was cancelled by the time its submit was answered names itself (§6.1).
-  const statementId = resp.headers.get("warp-statement-id");
+  const statementId = resp.headers.get("chargewire-statement-id");
   let doc: ProblemDocument | undefined;
   try {
     const parsed: unknown = JSON.parse(text);
@@ -320,7 +320,7 @@ export async function responseError(resp: Response): Promise<WarpSqlError> {
   if (doc === undefined) {
     let detail = text.trim();
     if (detail === "" || detail.length > 512) detail = resp.statusText || `HTTP ${resp.status}`;
-    return new WarpSqlError({
+    return new ChargewireError({
       code: ErrorCode.clientHttpError,
       status: resp.status,
       detail,
@@ -344,10 +344,10 @@ function str(value: unknown): string | undefined {
   return typeof value === "string" && value !== "" ? value : undefined;
 }
 
-export function invalidArgument(message: string): WarpSqlError {
-  return new WarpSqlError({ code: ErrorCode.clientInvalidArgument, message });
+export function invalidArgument(message: string): ChargewireError {
+  return new ChargewireError({ code: ErrorCode.clientInvalidArgument, message });
 }
 
-export function protocolError(message: string, cause?: unknown): WarpSqlError {
-  return new WarpSqlError({ code: ErrorCode.clientProtocolError, message, cause });
+export function protocolError(message: string, cause?: unknown): ChargewireError {
+  return new ChargewireError({ code: ErrorCode.clientProtocolError, message, cause });
 }

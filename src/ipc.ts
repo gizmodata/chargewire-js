@@ -12,7 +12,7 @@ import {
   util,
 } from "apache-arrow";
 
-import { ErrorCode, WarpSqlError, invalidArgument, protocolError } from "./errors.js";
+import { ErrorCode, ChargewireError, invalidArgument, protocolError } from "./errors.js";
 import type { RequestBody } from "./http.js";
 import { mediaTypeArrow } from "./http.js";
 
@@ -142,8 +142,8 @@ export function readMessageHeader(metadata: Uint8Array): { headerType: number; b
 }
 
 /** The error for a stream that ended without its end-of-stream marker. */
-export function incompleteStream(detail?: string): WarpSqlError {
-  return new WarpSqlError({
+export function incompleteStream(detail?: string): ChargewireError {
+  return new ChargewireError({
     code: ErrorCode.clientIncompleteStream,
     message: "the Arrow stream ended without its end-of-stream marker" + (detail ? `: ${detail}` : ""),
   });

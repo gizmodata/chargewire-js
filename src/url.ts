@@ -6,11 +6,11 @@ import { invalidArgument } from "./errors.js";
 export interface SchemeDefinition {
   /** TLS unless the URL says `?tls=false`. */
   tls: boolean;
-  /** Whether `?tls=false` may turn TLS off (true for `warp://`). */
+  /** Whether `?tls=false` may turn TLS off (true for `chargewire://`). */
   tlsParameter?: boolean;
   /** The port when the URL has none (default: 443 for TLS, 80 otherwise). */
   defaultPort?: number;
-  /** The protocol's base path when the URL has none (default `/warp`, §2.1). */
+  /** The protocol's base path when the URL has none (default `/chargewire`, §2.1). */
   defaultBasePath?: string;
 }
 
@@ -25,31 +25,31 @@ export type SchemeMap = Readonly<Record<string, SchemeDefinition>>;
  * ```
  */
 export const defaultSchemes: SchemeMap = Object.freeze({
-  warp: { tls: true, tlsParameter: true },
+  chargewire: { tls: true, tlsParameter: true },
   https: { tls: true },
   http: { tls: false },
 });
 
 /** The protocol's base path when a URL names none (§2.1). */
-export const defaultBasePath = "/warp";
+export const defaultBasePath = "/chargewire";
 
 /**
- * Parses a connection URL into the protocol's base URL (e.g. `https://db.example.com:31337/warp`).
+ * Parses a connection URL into the protocol's base URL (e.g. `https://db.example.com:31337/chargewire`).
  *
- *     warp://host:port                  HTTPS, base path /warp
- *     warp://host:port/custom/prefix    HTTPS, base path /custom/prefix
- *     warp://host:port?tls=false        plain HTTP (development, loopback)
- *     https://host:port[/prefix]        same as warp://
- *     http://host:port[/prefix]         plain HTTP
+ *     chargewire://host:port                  HTTPS, base path /chargewire
+ *     chargewire://host:port/custom/prefix    HTTPS, base path /custom/prefix
+ *     chargewire://host:port?tls=false        plain HTTP (development, loopback)
+ *     https://host:port[/prefix]              same as chargewire://
+ *     http://host:port[/prefix]               plain HTTP
  *
  * Credentials never belong in a URL; one with user info is refused.
  */
 export function parseUrl(raw: string, schemes: SchemeMap = defaultSchemes): URL {
   if (typeof raw !== "string" || raw === "") {
-    throw invalidArgument("a url is required, e.g. warp://host:port");
+    throw invalidArgument("a url is required, e.g. chargewire://host:port");
   }
   const match = /^([A-Za-z][A-Za-z0-9+.-]*):\/\//.exec(raw);
-  if (!match) throw invalidArgument(`invalid url ${redact(raw)}: it needs a scheme, e.g. warp://host:port`);
+  if (!match) throw invalidArgument(`invalid url ${redact(raw)}: it needs a scheme, e.g. chargewire://host:port`);
   const scheme = match[1]!.toLowerCase();
   const definition = Object.hasOwn(schemes, scheme) ? schemes[scheme] : undefined;
   if (definition === undefined) {
@@ -88,7 +88,7 @@ export function parseUrl(raw: string, schemes: SchemeMap = defaultSchemes): URL 
   }
 
   // The URL is parsed as https, which drops a port of 443 as https's default: take an explicit
-  // port from the text, so warp://host:443?tls=false and http://host:443 dial 443 (not 80), and
+  // port from the text, so chargewire://host:443?tls=false and http://host:443 dial 443 (not 80), and
   // a wrapper's scheme with a default port of its own keeps an explicit :443.
   const explicit = explicitPort(raw.slice(match[0].length));
   const port =

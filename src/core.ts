@@ -1,7 +1,7 @@
 // Licensed under the Apache License, Version 2.0.
 
 import { type IpcCodec, type IpcCompression, chooseCodec, enableCodec, farLinkMs } from "./compression.js";
-import { ErrorCode, WarpSqlError } from "./errors.js";
+import { ErrorCode, ChargewireError } from "./errors.js";
 import { type HttpClient, type Logger, discard } from "./http.js";
 import type { Platform } from "./platform/types.js";
 import type { DiscoveryDocument } from "./protocol.js";
@@ -15,11 +15,11 @@ export interface StatementSettings {
   retainResult: boolean | undefined;
   /** Milliseconds before the server cancels the statement (§6.9). */
   statementTimeoutMs: number | undefined;
-  /** JSON object recorded with the statement (Warp-Query-Tag), already serialized. */
+  /** JSON object recorded with the statement (Chargewire-Query-Tag), already serialized. */
   queryTag: string | undefined;
   /** The Arrow buffer compression asked for (`ipcCompression`). */
   ipcCompression: IpcCompression;
-  /** The codec results are asked in (Warp-IPC-Compression, §8.2), chosen from `ipcCompression` once the server is known; undefined: none. */
+  /** The codec results are asked in (Chargewire-IPC-Compression, §8.2), chosen from `ipcCompression` once the server is known; undefined: none. */
   ipcCodec: IpcCodec | undefined;
   /** Read up to this many partitions of a result at once (§6.10); 1: one stream. */
   resultPartitions: number;
@@ -113,7 +113,7 @@ export class Core {
   /** Fails unless the server lists `capability`: a client must not use what a server does not offer (§3.1). */
   require(capability: string, what: string): void {
     if (!this.has(capability)) {
-      throw new WarpSqlError({
+      throw new ChargewireError({
         code: ErrorCode.notImplemented,
         message: `${what} needs the server capability ${capability}, which this server does not list`,
       });
@@ -122,7 +122,7 @@ export class Core {
 
   checkOpen(): void {
     if (this.closed)
-      throw new WarpSqlError({ code: ErrorCode.clientConnectionClosed, message: "the connection is closed" });
+      throw new ChargewireError({ code: ErrorCode.clientConnectionClosed, message: "the connection is closed" });
   }
 
   /** Runs cleanup off the caller's path; its failure is only logged. */

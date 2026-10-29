@@ -1,13 +1,13 @@
 import { expect, test } from "@playwright/test";
 
-const setup = JSON.parse(process.env["WARP_SQL_JS_BROWSER_MTLS"] ?? "null") as {
+const setup = JSON.parse(process.env["CHARGEWIRE_JS_BROWSER_MTLS"] ?? "null") as {
   host: string;
   certPem: string;
   keyPem: string;
 } | null;
 if (setup === null) throw new Error("the global setup did not start a server");
 const port = setup.host.split(":")[1]!;
-const examplePort = Number(process.env["WARP_SQL_JS_EXAMPLE_PORT"] ?? 5173);
+const examplePort = Number(process.env["CHARGEWIRE_JS_EXAMPLE_PORT"] ?? 5173);
 
 // Playwright presents client certificates through a proxy of its own; WebKit on macOS
 // bypasses it for loopback addresses, except for Playwright's alias local.playwright.
@@ -33,7 +33,7 @@ type Client = typeof import("../../src/index.js");
 async function signIn(page: import("@playwright/test").Page, url: string) {
   return page.evaluate(
     async ({ url }) => {
-      const { connect, WarpSqlError } = (globalThis as unknown as { warpSql: Client }).warpSql;
+      const { connect, ChargewireError } = (globalThis as unknown as { chargewire: Client }).chargewire;
       try {
         const conn = await connect({ url, authType: "client_certificate" });
         const seven = Number((await conn.query("SELECT 7 AS v")).getChild("v")!.get(0));
@@ -44,7 +44,7 @@ async function signIn(page: import("@playwright/test").Page, url: string) {
         await conn.close();
         return { seven, rows, code: "" };
       } catch (err) {
-        return { seven: 0, rows: 0, code: err instanceof WarpSqlError ? err.code : String(err) };
+        return { seven: 0, rows: 0, code: err instanceof ChargewireError ? err.code : String(err) };
       }
     },
     { url },

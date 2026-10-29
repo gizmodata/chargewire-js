@@ -1,9 +1,9 @@
 // The browser smoke test: the example page and the client, in Chromium and WebKit, against
-// a local Warp SQL server that allows the page's origin (CORS). The server is the one
-// named by WARP_SQL_JS_TEST_SERVER_BINARY, as for the live tests; without it the run fails.
+// a local Chargewire server that allows the page's origin (CORS). The server is the one
+// named by CHARGEWIRE_JS_TEST_SERVER_BINARY, as for the live tests; without it the run fails.
 import { defineConfig, devices } from "@playwright/test";
 
-const port = Number(process.env["WARP_SQL_JS_EXAMPLE_PORT"] ?? 5173);
+const port = Number(process.env["CHARGEWIRE_JS_EXAMPLE_PORT"] ?? 5173);
 
 export default defineConfig({
   testDir: ".",

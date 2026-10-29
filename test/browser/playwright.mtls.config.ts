@@ -1,11 +1,11 @@
 // Client certificate sign-in in Chromium and WebKit: the example page, on another origin
 // than the server, signs in with the browser's client certificate (Playwright's
 // clientCertificates stand in for the user's certificate store). The server is the one
-// named by WARP_SQL_JS_TEST_SERVER_BINARY; it must offer certificate sign-in and allow
-// credentials for the page's origin (warp-sql feat/cors-credentials). Without it the run fails.
+// named by CHARGEWIRE_JS_TEST_SERVER_BINARY; it must offer certificate sign-in and allow
+// credentials for the page's origin (chargewire feat/cors-credentials). Without it the run fails.
 import { defineConfig, devices } from "@playwright/test";
 
-const port = Number(process.env["WARP_SQL_JS_EXAMPLE_PORT"] ?? 5173);
+const port = Number(process.env["CHARGEWIRE_JS_EXAMPLE_PORT"] ?? 5173);
 
 export default defineConfig({
   testDir: ".",

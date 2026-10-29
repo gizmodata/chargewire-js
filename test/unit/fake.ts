@@ -1,4 +1,4 @@
-// An in-process Warp SQL server for the behaviours a real server cannot be made to show:
+// An in-process Chargewire server for the behaviours a real server cannot be made to show:
 // tokens expiring mid-connection, sessions ended for a reason, partitions on other
 // servers, Retry-After. It is a fetch function.
 
@@ -43,15 +43,15 @@ export class FakeServer {
   sessions = 0;
 
   constructor() {
-    this.on("GET", /^\/warp$/, () =>
+    this.on("GET", /^\/chargewire$/, () =>
       json(200, {
-        protocol: "warp-sql",
+        protocol: "chargewire",
         protocol_versions: ["1"],
         capabilities: this.capabilities,
         auth: { grant_types: ["password"] },
       }),
     );
-    this.on("POST", /^\/warp\/v1\/auth\/token$/, () => {
+    this.on("POST", /^\/chargewire\/v1\/auth\/token$/, () => {
       const token = `t${++this.tokens}`;
       this.validTokens.add(token);
       return json(200, {
@@ -60,10 +60,10 @@ export class FakeServer {
         ...(this.expiresIn !== undefined ? { expires_in: this.expiresIn } : {}),
       });
     });
-    this.on("POST", /^\/warp\/v1\/sessions$/, () =>
+    this.on("POST", /^\/chargewire\/v1\/sessions$/, () =>
       json(201, { session_id: `s${++this.sessions}`, options: {}, transaction: "none", idle_timeout_s: 900 }),
     );
-    this.on("DELETE", /^\/warp\/v1\/sessions\/[^/]+$/, () => new Response(null, { status: 204 }));
+    this.on("DELETE", /^\/chargewire\/v1\/sessions\/[^/]+$/, () => new Response(null, { status: 204 }));
   }
 
   /** Adds a route; later routes win over earlier ones. */
@@ -86,7 +86,7 @@ export class FakeServer {
     this.requests.push(req);
     const auth = headers.get("authorization");
     const anonymous =
-      url.pathname === "/warp" || url.pathname.endsWith("/auth/token") || url.pathname.includes("/auth/oauth/");
+      url.pathname === "/chargewire" || url.pathname.endsWith("/auth/token") || url.pathname.includes("/auth/oauth/");
     if (!anonymous && (auth === null || !this.validTokens.has(auth.replace(/^Bearer /, "")))) {
       return problem(401, "invalid_token", {}, { "www-authenticate": "Bearer" });
     }

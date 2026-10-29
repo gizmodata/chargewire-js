@@ -14,7 +14,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [1.0.0] - 2026-10-20
 
-The first release, for Warp SQL protocol 1.0.0. Earlier builds (0.1.0) were never published;
+The first release, for Chargewire protocol 1.0.0. Earlier builds (0.1.0) were never published;
 the Changed and Fixed entries describe what moved since them, for anyone who installed one from git.
 <!-- Set the date above at tag time. -->
 
@@ -22,13 +22,13 @@ the Changed and Fixed entries describe what moved since them, for anyone who ins
 
 - Release automation uses separate concurrency groups for the publishing workflow and
   its reusable test workflow, so a tag cannot deadlock while waiting for its own tests.
-- `@gizmodata/warp-sql`: a TypeScript client for the Warp SQL protocol over plain
+- `@gizmodata/chargewire`: a TypeScript client for the Chargewire protocol over plain
   `fetch` and Apache Arrow, for Node 22.19+, browsers, Deno, Bun and Cloudflare Workers. ESM and
   CJS builds with types; a `node` build (TLS options through undici, streamed uploads, 8
   partitions) and a `default` build for browsers and edge runtimes (4 partitions), chosen by
   export conditions. `apache-arrow` 21 is a peer dependency.
 - `connect` with a password, an access token, a token provider or an identity provider's token
-  (`token_exchange`); `warp://`, `https://` and `http://` URLs, with schemes a wrapper can add.
+  (`token_exchange`); `chargewire://`, `https://` and `http://` URLs, with schemes a wrapper can add.
 - `query` (an Arrow Table), `stream` (an async iterator of RecordBatches with backpressure),
   `execute` (rows changed), prepared statements with JSON or Arrow parameters and
   `executeBatch`, bulk `ingest` from Tables, batches or (async) iterables, catalog `metadata`
@@ -38,8 +38,8 @@ the Changed and Fixed entries describe what moved since them, for anyone who ins
   carry Idempotency-Keys and are retried safely; tokens are renewed; lost sessions are replaced
   with their options; an `AbortSignal` cancels the statement on the server (by id, through the
   session, or by resending with the Idempotency-Key); zstd result buffers through fzstd.
-- Typed `WarpSqlError` with the problem document's code, status, SQLSTATE, detail and request id.
-- Tests: unit tests with an in-process fake server, live tests against warp-duckdb and Hardcharger
+- Typed `ChargewireError` with the problem document's code, status, SQLSTATE, detail and request id.
+- Tests: unit tests with an in-process fake server, live tests against chargewire-duckdb and Hardcharger
   (failing, never skipping, without a server, and when no test reached one), Node/Deno/Bun/workerd
   smoke tests, and Chromium/WebKit tests of the example page. CI against the Hardcharger image;
   a tag-triggered release gated on the full suite, published with npm trusted publishing.
@@ -57,19 +57,19 @@ the Changed and Fixed entries describe what moved since them, for anyone who ins
   `certificate_identity_mismatch` (none renews the token), and `unsupported_grant_type`;
   `Capability.mtlsIdentity`.
 - Tests: unit tests (the grant and its renewal, every refusal, each certificate code at sign-in and
-  later, the browser build's credentials mode), live tests on warp-duckdb and Hardcharger
+  later, the browser build's credentials mode), live tests on chargewire-duckdb and Hardcharger
   (`test/live/mtls.test.ts`: sign-in with a split result and an upload, an unknown identity, a bound
   token over another certificate and its twin, a grant without a certificate, identity match, a
   server with certificate sign-in off), and `npm run test:browser:mtls`, Chromium and WebKit signing
   in from a page on another origin, which fails on servers that don't send
   `Access-Control-Allow-Credentials`.
-- Warp SQL protocol 1.0.0 (warp-sql spec 1.0.0): the client follows the stable version 1.
+- Chargewire protocol 1.0.0 (chargewire spec 1.0.0): the client follows the stable version 1.
 - `ErrorCode.partitionNotFound` (`partition_not_found`, §6.4), `ErrorCode.internalError`
   (`internal_error`, 500) and `ErrorCode.clientHttpError` (`client_http_error`, an error answer
   without a problem document, such as a proxy's page; `status` says what it was). `ErrorCode` now
   lists every server code of version 1, and a unit test keeps it so.
 - `Capability.resultLocations` (`result_locations`). On a server that lists `result_locations` the
-  client sends `Warp-Result-Locations: remote` and reads partitions from their locations; it never
+  client sends `Chargewire-Result-Locations: remote` and reads partitions from their locations; it never
   sends the header otherwise, and a partition with a location it did not ask for is a
   `client_protocol_error`.
 - Types `InvalidTokenReason`, `CancelReason` and `ServerInfo` (the frozen version 1 keys of
@@ -78,7 +78,7 @@ the Changed and Fixed entries describe what moved since them, for anyone who ins
   unknown). `conn.metadata.serverInfo()` returns `ServerInfo`. `SessionEndedReason` gains
   `token_revoked`.
 - `version`, the package's version. In Node, Deno and Bun every request sends
-  `User-Agent: warp-sql-js/<version>` unless `userAgent` says otherwise (browsers set their own).
+  `User-Agent: chargewire-js/<version>` unless `userAgent` says otherwise (browsers set their own).
 - A TLS alert `certificate_required` or `certificate_revoked` from the server's handshake is
   reported with that code (§4.4), not as a transport error.
 - Tests: unit tests for each 1.0 behaviour (invalid_token and session_ended reasons, unknown
@@ -88,7 +88,7 @@ the Changed and Fixed entries describe what moved since them, for anyone who ins
   failure is `execution_error` with status 422 on both submit paths, that server-info has the
   frozen keys with their types and none of the removed ones, and that a non-ASCII query tag is
   accepted.
-- Browser sign-in (warp-sql spec §4.3, capability `oauth_browser`): `connect({ authType:
+- Browser sign-in (chargewire spec §4.3, capability `oauth_browser`): `connect({ authType:
   "oauth_browser", openUrl })` signs in with the server's identity provider through a browser and
   refuses a server without the capability before creating a flow; `browserSignIn` does it
   without a connection; `startBrowserSignIn` (optional `returnTo`), `pollBrowserSignIn` (the
@@ -98,9 +98,9 @@ the Changed and Fixed entries describe what moved since them, for anyone who ins
   this tab's `sessionStorage`, the flow id read from and removed from the fragment, flows the tab
   did not start ignored); `browserSignInProvider(discovery)` gives the provider's name. New error
   codes `flow_not_found`, `invalid_return_to`, `access_denied`, `identity_provider_error`. Unit
-  tests (13) and live tests (4) against `warp-duckdb` with a mock OpenID Connect provider
-  (`test/live/idp.ts`; server flags in `WARP_SQL_JS_TEST_SERVER_OAUTH_ARGS`).
-- `conn.transactionState()` and `SessionDocument.transaction` (warp-sql spec §5.2): `none`,
+  tests (13) and live tests (4) against `chargewire-duckdb` with a mock OpenID Connect provider
+  (`test/live/idp.ts`; server flags in `CHARGEWIRE_JS_TEST_SERVER_OAUTH_ARGS`).
+- `conn.transactionState()` and `SessionDocument.transaction` (chargewire spec §5.2): `none`,
   `open` or `aborted`, as the server's engine has it, so an application shows whether a
   transaction is open (from SQL `BEGIN` too, not only `setAutocommit(false)`) and whether a failed
   or cancelled statement left it needing a rollback. Exported type: `TransactionState`. Live tests:
@@ -150,15 +150,15 @@ the Changed and Fixed entries describe what moved since them, for anyone who ins
   `client_protocol_error` instead of being read as an update count.
 - A submit or execute answered with an error response for a statement that failed or was
   cancelled (spec 1.0.0: `execution_error` is 422, `statement_cancelled` and `statement_timeout`
-  are 409 with `cancel_reason`) carries `statementId` (from `Warp-Statement-Id`) and
+  are 409 with `cancel_reason`) carries `statementId` (from `Chargewire-Statement-Id`) and
   `cancelReason`, and the statement is deleted on the server as any finished one is.
 - A split result's partitions, on this server or others, are all opened at once (§6.10). Partitions
   on other servers used to be read one after another, and partition 0 was opened before the rest.
-- `Warp-Query-Tag` is sent as ASCII JSON, every other character as a `\u` escape (§2.5), and a
+- `Chargewire-Query-Tag` is sent as ASCII JSON, every other character as a `\u` escape (§2.5), and a
   tag over 4,096 bytes is refused (`client_invalid_argument`) before anything is sent.
 - `ipcCompression` takes `"none"`, `"lz4_frame"`, `"zstd"` or `"auto"`, and a codec is used only
   when the server lists its capability (`ipc_compression_lz4_frame`, `ipc_compression_zstd`). The
-  chosen codec is sent in `Warp-IPC-Compression` on every request that returns Arrow: the submit,
+  chosen codec is sent in `Chargewire-IPC-Compression` on every request that returns Arrow: the submit,
   each partition's result request, and catalog metadata requests (these had no header).
 - The README points Hardcharger users to `@gizmodata/hardcharger` (gizmodata/hardcharger-js), the
   `hardcharger://` client built on this package, instead of saying such a wrapper is planned.
@@ -175,18 +175,18 @@ the Changed and Fixed entries describe what moved since them, for anyone who ins
 - `close()` waits for the deletes of finished statements (sent off the caller's path) before it
   ends the session. A statement run just before `close()` (a `ROLLBACK` in a `finally`, say) had
   its delete arrive after the session's and answered `404`, which a browser logs as an error.
-- A streamed result split into several partitions without `Warp-Result-Order` (or with an unknown
+- A streamed result split into several partitions without `Chargewire-Result-Order` (or with an unknown
   one) was read as `any`; it is a `client_protocol_error` (§6.10). So is a statement document with
   several partitions and no (or an unknown) `partition_order`, which was read partition after
   partition.
-- An explicit port 443 was dropped from a plain-HTTP URL: `warp://host:443?tls=false` and
+- An explicit port 443 was dropped from a plain-HTTP URL: `chargewire://host:443?tls=false` and
   `http://host:443` dialled port 80, and a wrapper's scheme with a default port of its own
   (`hardcharger://host:443`) dialled that default instead of 443. The URL is parsed as https,
   which drops 443 as its default; the port is now taken from the URL's text.
 - A Number beyond `Number.MAX_SAFE_INTEGER` in JSON parameters (or any JSON body) is written in
   exponent form, so the server reads exactly that double. `JSON.stringify` wrote `2 ** 63` as
   `9223372036854776000`, another integer, which a server that binds wide integers exactly (spec
-  §6.1, warp-sql fc0c683) bound as that integer. Bigints were and are written as exact integers of
+  §6.1, chargewire fc0c683) bound as that integer. Bigints were and are written as exact integers of
   any size.
 - Arrow parameter rows (`executeBatch`, a prepared statement run with plain values) refuse an
   integer that does not fit its parameter's type, a fraction for an integer type, and a Number

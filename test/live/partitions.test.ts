@@ -6,7 +6,7 @@
 
 import { describe, expect, test } from "vitest";
 
-import { ErrorCode, WarpSqlError } from "../../src/index.js";
+import { ErrorCode, ChargewireError } from "../../src/index.js";
 import { FaultProxy, expectCode, isSubmitOf, numbers, open, scalar, sleep } from "./helpers.js";
 
 const descending = (n: number): number[] => Array.from({ length: n }, (_, i) => n - 1 - i);
@@ -31,11 +31,11 @@ describe("partitioned results", () => {
     expect(await scalar(conn, "SELECT count(*) FROM range(10)")).toBe(10);
     const submit = proxy.requests(isSubmitOf("range(10)"))[0]!;
     if (conn.capabilities.has("result_partitions")) {
-      expect(submit.headers["warp-result-partitions"]).toBe("8");
-      expect(submit.headers["warp-result-order"]).toBeUndefined(); // preserve is the default
+      expect(submit.headers["chargewire-result-partitions"]).toBe("8");
+      expect(submit.headers["chargewire-result-order"]).toBeUndefined(); // preserve is the default
     } else {
-      expect(submit.headers["warp-result-partitions"]).toBeUndefined();
-      expect(submit.headers["warp-result-order"]).toBeUndefined();
+      expect(submit.headers["chargewire-result-partitions"]).toBeUndefined();
+      expect(submit.headers["chargewire-result-order"]).toBeUndefined();
     }
   });
 
@@ -106,7 +106,7 @@ describe("partitioned results", () => {
         // keep reading until the cancel lands
       }
     }, ErrorCode.statementCancelled);
-    expect(err).toBeInstanceOf(WarpSqlError);
+    expect(err).toBeInstanceOf(ChargewireError);
     expect(await scalar(conn, "SELECT 42")).toBe(42);
   });
 

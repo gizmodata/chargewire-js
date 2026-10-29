@@ -1,10 +1,14 @@
 // A Cloudflare Worker that uses the client: run.mjs bundles it the way wrangler does
 // (export conditions "workerd", "worker", "browser") and runs it in workerd (Miniflare).
-import { WarpSqlError, connect } from "@gizmodata/warp-sql";
+import { ChargewireError, connect } from "@gizmodata/chargewire";
 
 export default {
   async fetch(_request, env) {
-    const conn = await connect({ url: env.WARP_URL, username: "warp_test", password: env.WARP_PASSWORD });
+    const conn = await connect({
+      url: env.CHARGEWIRE_URL,
+      username: "chargewire_test",
+      password: env.CHARGEWIRE_PASSWORD,
+    });
     try {
       const table = await conn.query("SELECT i FROM range(500000) t(i) ORDER BY i DESC");
       // The LZ4 decoder is a lazily loaded module, bundled the way wrangler would.
@@ -21,7 +25,7 @@ export default {
       try {
         await conn.query("SELEC 1");
       } catch (err) {
-        code = err instanceof WarpSqlError ? err.code : String(err);
+        code = err instanceof ChargewireError ? err.code : String(err);
       }
       return Response.json({ rows: table.numRows, first: Number(table.get(0).i), streamed, code, lz4 });
     } finally {

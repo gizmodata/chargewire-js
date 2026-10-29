@@ -1,6 +1,6 @@
 // The example page's script. `serve.mjs` bundles it with esbuild, which picks the
 // package's browser build through its export conditions.
-import { WarpSqlError, connect } from "@gizmodata/warp-sql";
+import { ChargewireError, connect } from "@gizmodata/chargewire";
 import { tableFromArrays } from "apache-arrow";
 
 const $ = (id) => document.getElementById(id);
@@ -54,11 +54,11 @@ $("query").addEventListener("submit", async (event) => {
     render(schema, rows);
     show(`${total} row(s) in ${Math.round(performance.now() - started)} ms`);
   } catch (err) {
-    show(err instanceof WarpSqlError ? `${err.code}: ${err.message}` : String(err), true);
+    show(err instanceof ChargewireError ? `${err.code}: ${err.message}` : String(err), true);
   }
 });
 
 $("cancel").addEventListener("click", () => running?.abort());
 
 // For the browser smoke test, which scripts the client directly.
-globalThis.warpSql = { connect, WarpSqlError, tableFromArrays };
+globalThis.chargewire = { connect, ChargewireError, tableFromArrays };

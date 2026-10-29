@@ -114,15 +114,15 @@ describe("idempotent retries", () => {
     ).toBeGreaterThanOrEqual(2);
   });
 
-  test("the query tag is sent as Warp-Query-Tag", async () => {
+  test("the query tag is sent as Chargewire-Query-Tag", async () => {
     const proxy = await FaultProxy.start();
     const conn = await open({ queryTag: { job: "nightly" } }, proxy.info);
     await scalar(conn, "SELECT 1");
-    expect(proxy.requests(isPost("/statements"))[0]!.headers["warp-query-tag"]).toBe('{"job":"nightly"}');
+    expect(proxy.requests(isPost("/statements"))[0]!.headers["chargewire-query-tag"]).toBe('{"job":"nightly"}');
     // Non-ASCII travels as \u escapes (§2.5), which the server accepts.
     const tagged = await conn.query("SELECT 2 AS v", undefined, { queryTag: { job: "nächtlich 🚀" } });
     expect(Number(tagged.getChildAt(0)!.get(0))).toBe(2);
-    expect(proxy.requests(isPost("/statements"))[1]!.headers["warp-query-tag"]).toBe(
+    expect(proxy.requests(isPost("/statements"))[1]!.headers["chargewire-query-tag"]).toBe(
       '{"job":"n\\u00e4chtlich \\ud83d\\ude80"}',
     );
     await expectCode(
@@ -230,7 +230,7 @@ describe("lost sessions (§5.6)", () => {
     expect(numbers(await q.query([41]))).toEqual([42]);
   });
 
-  // Only Hardcharger can end a session from SQL (KILL SESSION); warp-duckdb has no way to.
+  // Only Hardcharger can end a session from SQL (KILL SESSION); chargewire-duckdb has no way to.
   test.runIf(serverName() === "Hardcharger")(
     "a killed session is session_ended (reason killed), also for GET: not renewed, not replaced, not not-found",
     async () => {
@@ -239,7 +239,7 @@ describe("lost sessions (§5.6)", () => {
       const tokens = () => proxy.requests((r) => r.path.endsWith("/auth/token")).length;
       const before = tokens();
       const id = victim.sessionId;
-      // KILL SESSION takes Hardcharger's own id for the session, not the Warp SQL one.
+      // KILL SESSION takes Hardcharger's own id for the session, not the Chargewire one.
       const engineId = String(
         (await victim.query("SELECT CAST(HARDCHARGER_CURRENT_SESSION() AS VARCHAR) AS s")).get(0)!.s,
       );

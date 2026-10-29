@@ -1,17 +1,17 @@
 // Licensed under the Apache License, Version 2.0.
 //
-// Starts Warp SQL servers for the live tests. The binary is WARP_SQL_JS_TEST_SERVER_BINARY,
-// a server with warp-duckdb's interface (--host, --port, --username, --tls-cert,
-// --tls-key, --tls-client-ca, --cors-origin, password in WARP_DUCKDB_PASSWORD). For another
+// Starts Chargewire servers for the live tests. The binary is CHARGEWIRE_JS_TEST_SERVER_BINARY,
+// a server with chargewire-duckdb's interface (--host, --port, --username, --tls-cert,
+// --tls-key, --tls-client-ca, --cors-origin, password in CHARGEWIRE_DUCKDB_PASSWORD). For another
 // server, name its password variable, user-name flag, client-CA flag, CORS flag and name:
 //
-//   WARP_SQL_JS_TEST_SERVER_PASSWORD_ENV   (Hardcharger: HARDCHARGER_ADMIN_PASSWORD)
-//   WARP_SQL_JS_TEST_SERVER_USERNAME_FLAG  (Hardcharger: --admin-username)
-//   WARP_SQL_JS_TEST_SERVER_MTLS_FLAG      (Hardcharger: --mtls-ca-cert)
-//   WARP_SQL_JS_TEST_SERVER_CORS_FLAG      (Hardcharger: --cors-origins)
-//   WARP_SQL_JS_TEST_SERVER_NAME           (Hardcharger: Hardcharger)
+//   CHARGEWIRE_JS_TEST_SERVER_PASSWORD_ENV   (Hardcharger: HARDCHARGER_ADMIN_PASSWORD)
+//   CHARGEWIRE_JS_TEST_SERVER_USERNAME_FLAG  (Hardcharger: --admin-username)
+//   CHARGEWIRE_JS_TEST_SERVER_MTLS_FLAG      (Hardcharger: --mtls-ca-cert)
+//   CHARGEWIRE_JS_TEST_SERVER_CORS_FLAG      (Hardcharger: --cors-origins)
+//   CHARGEWIRE_JS_TEST_SERVER_NAME           (Hardcharger: Hardcharger)
 //
-// Only these WARP_SQL_JS_TEST_* variables are read: never a generic name like
+// Only these CHARGEWIRE_JS_TEST_* variables are read: never a generic name like
 // GIZMOSQL_PASSWORD that a developer's shell may export for a real server.
 
 import { type ChildProcess, spawn } from "node:child_process";
@@ -20,15 +20,15 @@ import { createServer } from "node:net";
 
 import { Agent, fetch as undiciFetch } from "undici";
 
-export const binaryEnv = "WARP_SQL_JS_TEST_SERVER_BINARY";
-export const testUsername = "warp_test";
+export const binaryEnv = "CHARGEWIRE_JS_TEST_SERVER_BINARY";
+export const testUsername = "chargewire_test";
 
 export function env(name: string, fallback: string): string {
   const value = process.env[name];
   return value !== undefined && value !== "" ? value : fallback;
 }
 
-export const serverName = (): string => env("WARP_SQL_JS_TEST_SERVER_NAME", "warp-duckdb");
+export const serverName = (): string => env("CHARGEWIRE_JS_TEST_SERVER_NAME", "chargewire-duckdb");
 
 /** What a test needs to reach a server. */
 export interface ServerInfo {
@@ -56,7 +56,7 @@ export async function freePort(): Promise<number> {
 
 /**
  * Launches the binary with a fresh password that contains ':' and '@' (credentials travel
- * as JSON fields, so nothing may split them, §4.1). `extra` takes warp-duckdb's flag
+ * as JSON fields, so nothing may split them, §4.1). `extra` takes chargewire-duckdb's flag
  * names; --tls-client-ca and --cors-origin are renamed to the server's own. `{port}` in an
  * argument becomes the server's port; `extraEnv` adds environment variables.
  */
@@ -66,7 +66,9 @@ export async function launchServer(
 ): Promise<RunningServer> {
   const binary = process.env[binaryEnv];
   if (binary === undefined || binary === "") {
-    throw new Error(`set ${binaryEnv} to a Warp SQL server binary (warp-duckdb or Hardcharger) to run the live tests`);
+    throw new Error(
+      `set ${binaryEnv} to a Chargewire server binary (chargewire-duckdb or Hardcharger) to run the live tests`,
+    );
   }
   const port = await freePort();
   const password = randomBytes(9).toString("hex") + ":p@ss:word";
@@ -77,13 +79,13 @@ export async function launchServer(
     "127.0.0.1",
     "--port",
     String(port),
-    env("WARP_SQL_JS_TEST_SERVER_USERNAME_FLAG", "--username"),
+    env("CHARGEWIRE_JS_TEST_SERVER_USERNAME_FLAG", "--username"),
     testUsername,
   ];
   for (const arg of extra) {
     if (arg === "--tls-cert") scheme = "https";
-    if (arg === "--tls-client-ca") args.push(env("WARP_SQL_JS_TEST_SERVER_MTLS_FLAG", arg));
-    else if (arg === "--cors-origin") args.push(env("WARP_SQL_JS_TEST_SERVER_CORS_FLAG", arg));
+    if (arg === "--tls-client-ca") args.push(env("CHARGEWIRE_JS_TEST_SERVER_MTLS_FLAG", arg));
+    else if (arg === "--cors-origin") args.push(env("CHARGEWIRE_JS_TEST_SERVER_CORS_FLAG", arg));
     else args.push(arg.replaceAll("{port}", String(port)));
   }
   const output: string[] = [];
@@ -91,7 +93,7 @@ export async function launchServer(
     env: {
       ...process.env,
       ...extraEnv,
-      [env("WARP_SQL_JS_TEST_SERVER_PASSWORD_ENV", "WARP_DUCKDB_PASSWORD")]: password,
+      [env("CHARGEWIRE_JS_TEST_SERVER_PASSWORD_ENV", "CHARGEWIRE_DUCKDB_PASSWORD")]: password,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -132,13 +134,13 @@ async function waitUp(server: RunningServer, child: ChildProcess, mtls: boolean)
   while (Date.now() < deadline) {
     if (child.exitCode !== null) throw new Error(`the server exited with code ${child.exitCode}`);
     try {
-      const resp = await undiciFetch(`${server.scheme}://${server.host}/warp`, {
+      const resp = await undiciFetch(`${server.scheme}://${server.host}/chargewire`, {
         dispatcher: insecure,
         signal: AbortSignal.timeout(2000),
       });
       await resp.body?.cancel();
       if (resp.status === 200) return;
-      last = `GET /warp: ${resp.status}`;
+      last = `GET /chargewire: ${resp.status}`;
     } catch (err) {
       // A server that requires client certificates refuses this handshake: anything but a
       // refused connection means it is up.
@@ -148,12 +150,12 @@ async function waitUp(server: RunningServer, child: ChildProcess, mtls: boolean)
     }
     await new Promise((r) => setTimeout(r, 100));
   }
-  throw new Error(`no Warp SQL server answered at ${server.host} within 20s: ${String(last)}`);
+  throw new Error(`no Chargewire server answered at ${server.host} within 20s: ${String(last)}`);
 }
 
 /** A token for raw protocol calls (killing sessions behind the client's back, say). */
 export async function rawToken(server: ServerInfo): Promise<string> {
-  const resp = await undiciFetch(`${server.scheme}://${server.host}/warp/v1/auth/token`, {
+  const resp = await undiciFetch(`${server.scheme}://${server.host}/chargewire/v1/auth/token`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ grant_type: "password", username: testUsername, password: server.password }),
@@ -166,7 +168,7 @@ export async function rawToken(server: ServerInfo): Promise<string> {
 /** Deletes a handle behind the client's back (`/v1/sessions/…`), as an eviction or a restart would. */
 export async function rawDelete(server: ServerInfo, path: string): Promise<void> {
   const token = await rawToken(server);
-  const resp = await undiciFetch(`${server.scheme}://${server.host}/warp${path}`, {
+  const resp = await undiciFetch(`${server.scheme}://${server.host}/chargewire${path}`, {
     method: "DELETE",
     headers: { authorization: `Bearer ${token}` },
     dispatcher: insecure,

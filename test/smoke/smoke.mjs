@@ -1,16 +1,16 @@
 /* global Deno, Bun */
 // One pass over the client's main paths, run under Node, Deno and Bun by run.mjs.
 // It imports the package by name (its export conditions pick the build), or the module
-// in WARP_SQL_JS_SMOKE_IMPORT.
-const specifier = globalThis.process?.env?.WARP_SQL_JS_SMOKE_IMPORT ?? "@gizmodata/warp-sql";
-const { connect, WarpSqlError } = await import(specifier);
+// in CHARGEWIRE_JS_SMOKE_IMPORT.
+const specifier = globalThis.process?.env?.CHARGEWIRE_JS_SMOKE_IMPORT ?? "@gizmodata/chargewire";
+const { connect, ChargewireError } = await import(specifier);
 const { tableFromArrays } = await import("apache-arrow");
 
 const env = (name) => globalThis.process?.env?.[name] ?? globalThis.Deno?.env.get(name);
 const conn = await connect({
-  url: env("WARP_SQL_JS_SMOKE_URL"),
-  username: "warp_test",
-  password: env("WARP_SQL_JS_SMOKE_PASSWORD"),
+  url: env("CHARGEWIRE_JS_SMOKE_URL"),
+  username: "chargewire_test",
+  password: env("CHARGEWIRE_JS_SMOKE_PASSWORD"),
 });
 const check = (ok, what) => {
   if (!ok) throw new Error(`smoke check failed: ${what}`);
@@ -40,7 +40,7 @@ let code = "";
 try {
   await conn.query("SELEC 1");
 } catch (err) {
-  code = err instanceof WarpSqlError ? err.code : String(err);
+  code = err instanceof ChargewireError ? err.code : String(err);
 }
 check(code === "sql_error", `error code (${code})`);
 const controller = new AbortController();
@@ -51,7 +51,7 @@ try {
   });
   code = "";
 } catch (err) {
-  code = err instanceof WarpSqlError ? err.code : String(err);
+  code = err instanceof ChargewireError ? err.code : String(err);
 }
 check(code === "statement_cancelled", `cancel (${code})`);
 check((await conn.query("SELECT 1 AS one")).numRows === 1, "usable after cancel");

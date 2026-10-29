@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-const server = JSON.parse(process.env["WARP_SQL_JS_BROWSER_SERVER"] ?? "null") as {
+const server = JSON.parse(process.env["CHARGEWIRE_JS_BROWSER_SERVER"] ?? "null") as {
   host: string;
   password: string;
 } | null;
@@ -13,14 +13,14 @@ test.beforeEach(async ({ page }) => {
     expect(request.url()).not.toContain(encodeURIComponent(server.password));
     expect(request.url()).not.toContain(server.password);
   });
-  await page.goto(`/?url=${encodeURIComponent(url)}&username=warp_test`);
+  await page.goto(`/?url=${encodeURIComponent(url)}&username=chargewire_test`);
 });
 
 test("the example page signs in, runs a query and shows the rows", async ({ page }) => {
   await page.getByLabel("Password").fill(server.password);
   await page.getByRole("button", { name: "Run" }).click();
   await expect(page.getByRole("status")).toContainText("1 row(s)");
-  await expect(page.locator("#result")).toContainText("hello from Warp SQL");
+  await expect(page.locator("#result")).toContainText("hello from Chargewire");
   await expect(page.locator("#result")).toContainText("42");
 });
 
@@ -38,14 +38,14 @@ test("a server error shows its code", async ({ page }) => {
 test("the client streams, splits, uploads and cancels in the browser", async ({ page }) => {
   const result = await page.evaluate(
     async ({ url, password }) => {
-      const { connect, WarpSqlError, tableFromArrays } = (
+      const { connect, ChargewireError, tableFromArrays } = (
         globalThis as unknown as {
-          warpSql: typeof import("../../src/index.js") & {
+          chargewire: typeof import("../../src/index.js") & {
             tableFromArrays: typeof import("apache-arrow").tableFromArrays;
           };
         }
-      ).warpSql;
-      const conn = await connect({ url, username: "warp_test", password });
+      ).chargewire;
+      const conn = await connect({ url, username: "chargewire_test", password });
       let rows = 0;
       const stream = conn.stream("SELECT i FROM range(1000000) t(i) ORDER BY i DESC");
       let first: unknown;
@@ -82,14 +82,14 @@ test("the client streams, splits, uploads and cancels in the browser", async ({ 
       try {
         await long;
       } catch (err) {
-        cancelCode = err instanceof WarpSqlError ? err.code : String(err);
+        cancelCode = err instanceof ChargewireError ? err.code : String(err);
       }
       const after = Number((await conn.query("SELECT 42 AS v")).getChild("v")!.get(0));
       let wrongPassword = "";
       try {
-        await connect({ url, username: "warp_test", password: "wrong" });
+        await connect({ url, username: "chargewire_test", password: "wrong" });
       } catch (err) {
-        wrongPassword = err instanceof WarpSqlError ? err.code : String(err);
+        wrongPassword = err instanceof ChargewireError ? err.code : String(err);
       }
       await conn.close();
       return {

@@ -37,7 +37,7 @@ export interface ColumnInfo {
   precision: number | undefined;
   scale: number | undefined;
   remarks: string | undefined;
-  /** The default's SQL text (`WARP:SQL:COLUMN_DEFAULT`). */
+  /** The default's SQL text (`CHARGEWIRE:SQL:COLUMN_DEFAULT`). */
   defaultValue: string | undefined;
 }
 
@@ -222,7 +222,7 @@ export class Metadata {
           precision: number("ARROW:FLIGHT:SQL:PRECISION"),
           scale: number("ARROW:FLIGHT:SQL:SCALE"),
           remarks: meta.get("ARROW:FLIGHT:SQL:REMARKS"),
-          defaultValue: meta.get("WARP:SQL:COLUMN_DEFAULT"),
+          defaultValue: meta.get("CHARGEWIRE:SQL:COLUMN_DEFAULT"),
         });
       });
     }
@@ -234,7 +234,7 @@ export class Metadata {
     core.checkOpen();
     await core.settle();
     const headers: Record<string, string> = { Accept: mediaTypeArrow };
-    if (core.settings.ipcCodec !== undefined) headers["Warp-IPC-Compression"] = core.settings.ipcCodec;
+    if (core.settings.ipcCodec !== undefined) headers["Chargewire-IPC-Compression"] = core.settings.ipcCodec;
     const resp = await core.session.do("session", "", (id) => ({
       method: "GET",
       path: `${sessionPath(id)}/metadata/${kind}`,

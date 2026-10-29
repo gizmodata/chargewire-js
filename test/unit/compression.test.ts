@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { tableFromArrays } from "apache-arrow";
 import { describe, expect, test } from "vitest";
 
-import { type Connection, ErrorCode, WarpSqlError, connect } from "../../src/index.js";
+import { type Connection, ErrorCode, ChargewireError, connect } from "../../src/index.js";
 import { autoCodec, chooseCodec, farLinkMs } from "../../src/compression.js";
 import { FakeServer, arrow, json } from "./fake.js";
 
@@ -17,7 +17,7 @@ function serverWith(capabilities: string[], discoveryDelays: number[] = [0]) {
   let discoveries = 0;
   const fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
-    if (url.pathname === "/warp") {
+    if (url.pathname === "/chargewire") {
       const delay = discoveryDelays[Math.min(discoveries++, discoveryDelays.length - 1)]!;
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
@@ -27,7 +27,7 @@ function serverWith(capabilities: string[], discoveryDelays: number[] = [0]) {
 }
 
 const open = (fetch: typeof globalThis.fetch, extra: Record<string, unknown> = {}): Promise<Connection> =>
-  connect({ url: "warp://db.test:31337", username: "joe", password: "pw", fetch, logger: quiet, ...extra });
+  connect({ url: "chargewire://db.test:31337", username: "joe", password: "pw", fetch, logger: quiet, ...extra });
 
 const both = ["ipc_compression_lz4_frame", "ipc_compression_zstd"];
 const asked = (server: FakeServer) =>
@@ -42,9 +42,9 @@ async function expectInvalid(work: Promise<unknown>, pattern: RegExp): Promise<v
     () => undefined,
     (e: unknown) => e,
   );
-  expect(err).toBeInstanceOf(WarpSqlError);
-  expect((err as WarpSqlError).code).toBe(ErrorCode.clientInvalidArgument);
-  expect((err as WarpSqlError).message).toMatch(pattern);
+  expect(err).toBeInstanceOf(ChargewireError);
+  expect((err as ChargewireError).code).toBe(ErrorCode.clientInvalidArgument);
+  expect((err as ChargewireError).message).toMatch(pattern);
 }
 
 describe("choosing a codec (§8.2)", () => {
@@ -81,7 +81,7 @@ describe("choosing a codec (§8.2)", () => {
     for (const value of ["none", "lz4_frame", "zstd", "auto"] as const) {
       await conn.query("SELECT 1", undefined, { ipcCompression: value });
     }
-    expect(asked(server).map((r) => r.headers.get("warp-ipc-compression"))).toEqual([
+    expect(asked(server).map((r) => r.headers.get("chargewire-ipc-compression"))).toEqual([
       null,
       "lz4_frame",
       "zstd",
@@ -93,7 +93,7 @@ describe("choosing a codec (§8.2)", () => {
     const { server, fetch } = serverWith(both);
     answerRows(server);
     await (await open(fetch)).query("SELECT 1");
-    expect(asked(server)[0]!.headers.has("warp-ipc-compression")).toBe(false);
+    expect(asked(server)[0]!.headers.has("chargewire-ipc-compression")).toBe(false);
   });
 
   test("a codec the server does not list is not asked for, explicitly or by auto", async () => {
@@ -106,7 +106,9 @@ describe("choosing a codec (§8.2)", () => {
       const { server, fetch } = serverWith([...listed]);
       answerRows(server);
       await (await open(fetch, { ipcCompression: setting })).query("SELECT 1");
-      expect(asked(server)[0]!.headers.has("warp-ipc-compression"), `${setting} with ${listed.join()}`).toBe(false);
+      expect(asked(server)[0]!.headers.has("chargewire-ipc-compression"), `${setting} with ${listed.join()}`).toBe(
+        false,
+      );
     }
   });
 
@@ -114,7 +116,7 @@ describe("choosing a codec (§8.2)", () => {
     const { server, fetch, discoveries } = serverWith(both, [0]);
     answerRows(server);
     await (await open(fetch, { ipcCompression: "auto" })).query("SELECT 1");
-    expect(asked(server)[0]!.headers.get("warp-ipc-compression")).toBe("lz4_frame");
+    expect(asked(server)[0]!.headers.get("chargewire-ipc-compression")).toBe("lz4_frame");
     expect(discoveries()).toBe(1);
   });
 
@@ -122,7 +124,7 @@ describe("choosing a codec (§8.2)", () => {
     const { server, fetch, discoveries } = serverWith(both, [30]);
     answerRows(server);
     await (await open(fetch, { ipcCompression: "auto" })).query("SELECT 1");
-    expect(asked(server)[0]!.headers.get("warp-ipc-compression")).toBe("zstd");
+    expect(asked(server)[0]!.headers.get("chargewire-ipc-compression")).toBe("zstd");
     expect(discoveries()).toBe(2);
   });
 
@@ -132,7 +134,7 @@ describe("choosing a codec (§8.2)", () => {
     const conn = await open(fetch, { ipcCompression: "auto" });
     await conn.query("SELECT 1");
     await conn.query("SELECT 2", undefined, { ipcCompression: "auto" });
-    expect(asked(server).map((r) => r.headers.get("warp-ipc-compression"))).toEqual(["lz4_frame", "lz4_frame"]);
+    expect(asked(server).map((r) => r.headers.get("chargewire-ipc-compression"))).toEqual(["lz4_frame", "lz4_frame"]);
     expect(discoveries()).toBe(2); // measured once per connection
   });
 });
@@ -142,13 +144,13 @@ describe("the codec on every request that returns Arrow (§6.10, §8.2)", () => 
     const { server, fetch } = serverWith([...both, "result_partitions"]);
     const lz4 = () =>
       new Response(lz4Stream.slice(), {
-        headers: { "content-type": "application/vnd.apache.arrow.stream", "warp-ipc-compression": "lz4_frame" },
+        headers: { "content-type": "application/vnd.apache.arrow.stream", "chargewire-ipc-compression": "lz4_frame" },
       });
     server.on("POST", /\/statements$/, () => {
       const resp = lz4();
-      resp.headers.set("warp-statement-id", "q1");
-      resp.headers.set("warp-result-partitions", "3");
-      resp.headers.set("warp-result-order", "any");
+      resp.headers.set("chargewire-statement-id", "q1");
+      resp.headers.set("chargewire-result-partitions", "3");
+      resp.headers.set("chargewire-result-order", "any");
       return resp;
     });
     server.on("GET", /\/statements\/q1\/result$/, () => lz4());
@@ -158,7 +160,8 @@ describe("the codec on every request that returns Arrow (§6.10, §8.2)", () => 
     expect(table.numRows).toBe(9000);
     const results = server.requests.filter((r) => r.url.pathname.endsWith("/result"));
     expect(results.map((r) => r.url.searchParams.get("partition")).sort()).toEqual(["1", "2"]);
-    for (const r of [...asked(server), ...results]) expect(r.headers.get("warp-ipc-compression")).toBe("lz4_frame");
+    for (const r of [...asked(server), ...results])
+      expect(r.headers.get("chargewire-ipc-compression")).toBe("lz4_frame");
   });
 
   test("async: every partition's result GET carries it, and so do metadata requests", async () => {
@@ -185,6 +188,6 @@ describe("the codec on every request that returns Arrow (§6.10, §8.2)", () => 
     await conn.metadata.tableTypes();
     const arrowRequests = server.requests.filter((r) => /\/result$|\/metadata\//.test(r.url.pathname));
     expect(arrowRequests.length).toBe(3);
-    for (const r of arrowRequests) expect(r.headers.get("warp-ipc-compression")).toBe("zstd");
+    for (const r of arrowRequests) expect(r.headers.get("chargewire-ipc-compression")).toBe("zstd");
   });
 });

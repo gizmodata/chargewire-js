@@ -36,6 +36,6 @@ async function measure(label, external) {
   );
 }
 
-await measure("@gizmodata/warp-sql (apache-arrow, fzstd external)", ["apache-arrow", "fzstd"]);
+await measure("@gizmodata/chargewire (apache-arrow, fzstd external)", ["apache-arrow", "fzstd"]);
 await measure("with fzstd", ["apache-arrow"]);
 await measure("with fzstd and apache-arrow", []);

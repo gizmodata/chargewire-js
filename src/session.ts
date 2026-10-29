@@ -1,6 +1,6 @@
 // Licensed under the Apache License, Version 2.0.
 
-import { ErrorCode, WarpSqlError, problemError, protocolError } from "./errors.js";
+import { ErrorCode, ChargewireError, problemError, protocolError } from "./errors.js";
 import { type HttpClient, type HttpRequest, decodeJSON, discard, jsonBody } from "./http.js";
 import { type OptionsResult, type SessionDocument, transactionState } from "./protocol.js";
 
@@ -30,9 +30,9 @@ export function sessionPath(id: string): string {
  * in again on its own (§4.2), and an administrator's `killed` (or a reason the client
  * doesn't know) is reported, not papered over: those are the error.
  */
-export function isSessionLost(err: unknown, canRenew: boolean): err is WarpSqlError {
+export function isSessionLost(err: unknown, canRenew: boolean): err is ChargewireError {
   return (
-    err instanceof WarpSqlError &&
+    err instanceof ChargewireError &&
     (err.code === ErrorCode.sessionNotFound ||
       (err.code === ErrorCode.sessionEnded && err.reason === "token_expired" && canRenew))
   );
@@ -44,11 +44,11 @@ const replacedNote = (oldId: string, newId: string): string =>
 
 /** The error for an operation that could not run because its session is gone (§5.6). */
 export function sessionLostError(
-  cause: WarpSqlError,
+  cause: ChargewireError,
   oldId: string,
   newId: string | undefined,
   lost: string,
-): WarpSqlError {
+): ChargewireError {
   let message = `the server no longer has session ${oldId} (${cause.message})`;
   if (lost !== "") message += `; the ${lost} that lived in it is gone`;
   message +=
@@ -118,11 +118,11 @@ export class Session {
 
   #checkOpen(): void {
     if (this.#closed)
-      throw new WarpSqlError({ code: ErrorCode.clientConnectionClosed, message: "the connection is closed" });
+      throw new ChargewireError({ code: ErrorCode.clientConnectionClosed, message: "the connection is closed" });
   }
 
   /** Opens a replacement for session `failedId`, unless that already happened; returns the current id. */
-  async #replace(failedId: string, cause: WarpSqlError, tokenUsed: string | undefined): Promise<string> {
+  async #replace(failedId: string, cause: ChargewireError, tokenUsed: string | undefined): Promise<string> {
     this.#checkOpen();
     if (this.#id !== failedId) return this.#id;
     if (this.#replacing?.failedId === failedId) return this.#replacing.promise;
@@ -180,7 +180,7 @@ export class Session {
       try {
         return await this.#http.request(build(newId));
       } catch (retryErr) {
-        if (retryErr instanceof WarpSqlError)
+        if (retryErr instanceof ChargewireError)
           throw retryErr.with({ message: retryErr.message + replacedNote(id, newId) });
         throw retryErr;
       }
@@ -249,7 +249,7 @@ export class Session {
     try {
       await this.#http.void({ method: "DELETE", path: sessionPath(this.#id), idempotent: true });
     } catch (err) {
-      if (WarpSqlError.is(err, ErrorCode.sessionNotFound)) return;
+      if (ChargewireError.is(err, ErrorCode.sessionNotFound)) return;
       throw err;
     }
   }

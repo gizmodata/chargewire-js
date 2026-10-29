@@ -16,13 +16,13 @@ export const Capability = {
   ipcCompressionZstd: "ipc_compression_zstd",
   /** Results split over several partitions on this server (§6.10). */
   resultPartitions: "result_partitions",
-  /** Partitions held by other servers (§6.2): the client sends `Warp-Result-Locations: remote` to accept them. */
+  /** Partitions held by other servers (§6.2): the client sends `Chargewire-Result-Locations: remote` to accept them. */
   resultLocations: "result_locations",
   mtlsIdentity: "mtls_identity",
   oauthBrowser: "oauth_browser",
 } as const;
 
-/** The document `GET /warp` returns (§3.1). */
+/** The document `GET /chargewire` returns (§3.1). */
 export interface DiscoveryDocument {
   protocol: string;
   protocol_versions: string[];

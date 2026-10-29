@@ -28,7 +28,7 @@ export async function startIdp(): Promise<MockIdp> {
   const codes = new Map<string, { challenge: string; nonce: string; redirect: string; email: string }>();
   const idp: MockIdp = {
     issuer: "",
-    clientId: "warp-sql-js-live",
+    clientId: "chargewire-js-live",
     clientSecret: randomBytes(12).toString("base64") + "+/=",
     email: "alice@example.com",
     deny: false,

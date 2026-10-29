@@ -3,13 +3,13 @@ import { readFileSync } from "node:fs";
 import { tableFromArrays } from "apache-arrow";
 import { describe, expect, test } from "vitest";
 
-import { type Connection, ErrorCode, WarpSqlError, connect, version } from "../../src/index.js";
+import { type Connection, ErrorCode, ChargewireError, connect, version } from "../../src/index.js";
 import { FakeServer, arrow, json, problem } from "./fake.js";
 
 const quiet = { warn: () => {} };
 const open = (server: FakeServer, extra: Record<string, unknown> = {}): Promise<Connection> =>
   connect({
-    url: "warp://db.test:31337",
+    url: "chargewire://db.test:31337",
     username: "joe",
     password: "p:w@d",
     fetch: server.fetch,
@@ -19,14 +19,14 @@ const open = (server: FakeServer, extra: Record<string, unknown> = {}): Promise<
 
 const doneDoc = (id: string, result: unknown) => ({ statement_id: id, state: "succeeded", result });
 
-async function expectCode(work: Promise<unknown>, code: string): Promise<WarpSqlError> {
+async function expectCode(work: Promise<unknown>, code: string): Promise<ChargewireError> {
   const err = await work.then(
     () => undefined,
     (e: unknown) => e,
   );
-  expect(err).toBeInstanceOf(WarpSqlError);
-  expect((err as WarpSqlError).code, String(err)).toBe(code);
-  return err as WarpSqlError;
+  expect(err).toBeInstanceOf(ChargewireError);
+  expect((err as ChargewireError).code, String(err)).toBe(code);
+  return err as ChargewireError;
 }
 
 describe("connecting", () => {
@@ -40,7 +40,7 @@ describe("connecting", () => {
 
   test("a server that does not speak version 1 is refused", async () => {
     const server = new FakeServer();
-    server.on("GET", /^\/warp$/, () => json(200, { protocol: "warp-sql", protocol_versions: ["2"] }));
+    server.on("GET", /^\/chargewire$/, () => json(200, { protocol: "chargewire", protocol_versions: ["2"] }));
     await expectCode(open(server), ErrorCode.clientProtocolError);
   });
 });
@@ -122,7 +122,7 @@ describe("sessions (§5.6)", () => {
 
   test("GET of a killed session is session_ended with its reason: no token renewal, no replacement", async () => {
     const server = new FakeServer();
-    server.on("GET", /^\/warp\/v1\/sessions\/s1$/, () => problem(401, "session_ended", { reason: "killed" }));
+    server.on("GET", /^\/chargewire\/v1\/sessions\/s1$/, () => problem(401, "session_ended", { reason: "killed" }));
     const conn = await open(server);
     const err = await expectCode(conn.getSession(), ErrorCode.sessionEnded);
     expect(err.reason).toBe("killed");
@@ -167,7 +167,7 @@ describe("sessions (§5.6)", () => {
     server.validTokens.add("static-token");
     server.on("POST", /\/statements$/, () => problem(401, "session_ended", { reason: "token_expired" }));
     const conn = await connect({
-      url: "warp://db.test:31337",
+      url: "chargewire://db.test:31337",
       token: "static-token",
       fetch: server.fetch,
       logger: quiet,
@@ -194,12 +194,12 @@ describe("sessions (§5.6)", () => {
 
   test("a transaction value the client doesn't know is reported as unknown (§12)", async () => {
     const server = new FakeServer();
-    server.on("GET", /^\/warp\/v1\/sessions\/s1$/, () =>
+    server.on("GET", /^\/chargewire\/v1\/sessions\/s1$/, () =>
       json(200, { session_id: "s1", options: {}, transaction: "some_future_state" }),
     );
     const conn = await open(server);
     expect(await conn.transactionState()).toBe("unknown");
-    server.on("GET", /^\/warp\/v1\/sessions\/s1$/, () =>
+    server.on("GET", /^\/chargewire\/v1\/sessions\/s1$/, () =>
       json(200, { session_id: "s1", options: {}, transaction: "aborted" }),
     );
     expect(await conn.transactionState()).toBe("aborted");
@@ -255,11 +255,11 @@ describe("retries", () => {
     expect(await conn.execute("ROLLBACK")).toBe(1);
     const closing = conn.close();
     await new Promise((r) => setTimeout(r, 20));
-    expect(server.count("DELETE", /^\/warp\/v1\/sessions\/[^/]+$/)).toBe(0);
+    expect(server.count("DELETE", /^\/chargewire\/v1\/sessions\/[^/]+$/)).toBe(0);
     release!();
     await closing;
     const order = server.requests.filter((r) => r.method === "DELETE").map((r) => r.url.pathname);
-    expect(order).toEqual(["/warp/v1/sessions/s1/statements/q1", "/warp/v1/sessions/s1"]);
+    expect(order).toEqual(["/chargewire/v1/sessions/s1/statements/q1", "/chargewire/v1/sessions/s1"]);
   });
 
   test.each(["query", "execute"] as const)(
@@ -278,10 +278,10 @@ describe("retries", () => {
       const result = conn[method]("SELECT 42 AS answer");
       await started;
       await conn.close();
-      expect(server.count("DELETE", /^\/warp\/v1\/sessions\/[^/]+$/)).toBe(1);
+      expect(server.count("DELETE", /^\/chargewire\/v1\/sessions\/[^/]+$/)).toBe(1);
       release(
         method === "query"
-          ? arrow(tableFromArrays({ answer: [42] }), { "warp-statement-id": "q1" })
+          ? arrow(tableFromArrays({ answer: [42] }), { "chargewire-statement-id": "q1" })
           : json(200, doneDoc("q1", { kind: "update", rows_affected: 1 })),
       );
       await result;
@@ -335,7 +335,7 @@ describe("results", () => {
           kind: "rows",
           partitions: [
             { index: 0, location: null },
-            { index: 1, location: "https://worker-2.test:9000/warp" },
+            { index: 1, location: "https://worker-2.test:9000/chargewire" },
           ],
           partition_order: "any",
           retained: true,
@@ -345,7 +345,7 @@ describe("results", () => {
     // Partition 0 answers only once partition 1 was asked for: read one after the other, this hangs.
     let remoteAsked: () => void = () => {};
     const remote = new Promise<void>((resolve) => (remoteAsked = resolve));
-    server.on("GET", /^\/warp\/v1\/sessions\/s1\/statements\/q1\/result$/, async (req) => {
+    server.on("GET", /^\/chargewire\/v1\/sessions\/s1\/statements\/q1\/result$/, async (req) => {
       if (req.url.host === "worker-2.test:9000" && req.url.searchParams.get("partition") === "1") {
         remoteAsked();
         return arrow(rows(100, 3));
@@ -356,7 +356,7 @@ describe("results", () => {
     const conn = await open(server, { async: true });
     const table = await conn.query("SELECT v FROM t");
     expect(Array.from(table.getChild("v")!).sort((a, b) => a - b)).toEqual([0, 1, 2, 100, 101, 102]);
-    expect(submit?.get("warp-result-locations")).toBe("remote");
+    expect(submit?.get("chargewire-result-locations")).toBe("remote");
     const remoteReq = server.requests.find((r) => r.url.host === "worker-2.test:9000")!;
     expect(remoteReq.headers.get("authorization")).toBe("Bearer t1");
   });
@@ -372,7 +372,7 @@ describe("results", () => {
           kind: "rows",
           partitions: [
             { index: 0, location: null },
-            { index: 1, location: "https://worker-2.test:9000/warp" },
+            { index: 1, location: "https://worker-2.test:9000/chargewire" },
           ],
           partition_order: "any",
           retained: true,
@@ -382,7 +382,7 @@ describe("results", () => {
     server.on("GET", /\/statements\/q1\/result$/, () => arrow(rows(0, 3)));
     const conn = await open(server, { async: true });
     await expectCode(conn.query("SELECT v FROM t"), ErrorCode.clientProtocolError);
-    expect(submit?.has("warp-result-locations")).toBe(false);
+    expect(submit?.has("chargewire-result-locations")).toBe(false);
     expect(server.requests.some((r) => r.url.host === "worker-2.test:9000")).toBe(false);
   });
 
@@ -419,28 +419,28 @@ describe("results", () => {
     }
   });
 
-  test("a streamed result in several partitions without Warp-Result-Order is a protocol error, never `any` (§6.10)", async () => {
+  test("a streamed result in several partitions without Chargewire-Result-Order is a protocol error, never `any` (§6.10)", async () => {
     for (const order of [undefined, "shuffled"]) {
       const server = new FakeServer();
       server.capabilities.push("result_partitions");
       server.on("POST", /\/statements$/, () =>
         arrow(rows(0, 2), {
-          "warp-statement-id": "q1",
-          "warp-result-partitions": "2",
-          ...(order !== undefined ? { "warp-result-order": order } : {}),
+          "chargewire-statement-id": "q1",
+          "chargewire-result-partitions": "2",
+          ...(order !== undefined ? { "chargewire-result-order": order } : {}),
         }),
       );
       server.on("GET", /\/statements\/q1\/result$/, () => arrow(rows(2, 2)));
       const conn = await open(server);
       const err = await expectCode(conn.query("SELECT v FROM t"), ErrorCode.clientProtocolError);
-      expect(err.message).toContain("Warp-Result-Order");
+      expect(err.message).toContain("Chargewire-Result-Order");
       expect(server.count("GET", /\/statements\/q1\/result$/)).toBe(0);
       // The twin: the same answer with the header is read in order.
       server.on("POST", /\/statements$/, () =>
         arrow(rows(0, 2), {
-          "warp-statement-id": "q1",
-          "warp-result-partitions": "2",
-          "warp-result-order": "interleaved",
+          "chargewire-statement-id": "q1",
+          "chargewire-result-partitions": "2",
+          "chargewire-result-order": "interleaved",
         }),
       );
       expect(Array.from((await conn.query("SELECT v FROM t")).getChild("v")!)).toEqual([0, 1, 2, 3]);
@@ -452,9 +452,9 @@ describe("results", () => {
     server.capabilities.push("result_partitions");
     server.on("POST", /\/statements$/, () =>
       arrow(rows(0, 2), {
-        "warp-statement-id": "q1",
-        "warp-result-partitions": "2",
-        "warp-result-order": "interleaved",
+        "chargewire-statement-id": "q1",
+        "chargewire-result-partitions": "2",
+        "chargewire-result-order": "interleaved",
       }),
     );
     server.on("GET", /\/statements\/q1\/result$/, () => {
@@ -475,7 +475,7 @@ describe("results", () => {
       /\/statements$/,
       () =>
         new Response(new Uint8Array(full).slice(0, full.byteLength - 8), {
-          headers: { "content-type": "application/vnd.apache.arrow.stream", "warp-statement-id": "q1" },
+          headers: { "content-type": "application/vnd.apache.arrow.stream", "chargewire-statement-id": "q1" },
         }),
     );
     server.on("GET", /\/statements\/q1$/, () => json(200, doneDoc("q1", { kind: "rows", retained: false })));
@@ -483,7 +483,7 @@ describe("results", () => {
     const err = await expectCode(conn.query("SELECT v FROM t"), ErrorCode.clientIncompleteStream);
     expect(err.message).toContain("cannot be resumed");
     // Its positive twin: the whole stream, marker included, is a table.
-    server.on("POST", /\/statements$/, () => arrow(rows(0, 1000), { "warp-statement-id": "q2" }));
+    server.on("POST", /\/statements$/, () => arrow(rows(0, 1000), { "chargewire-statement-id": "q2" }));
     expect((await conn.query("SELECT v FROM t")).numRows).toBe(1000);
   });
 
@@ -508,7 +508,7 @@ describe("statements (§6)", () => {
     for (const mode of [{}, { async: true }]) {
       const server = new FakeServer();
       server.on("POST", /\/statements$/, () =>
-        problem(409, "statement_cancelled", { cancel_reason: "killed" }, { "warp-statement-id": "q9" }),
+        problem(409, "statement_cancelled", { cancel_reason: "killed" }, { "chargewire-statement-id": "q9" }),
       );
       let deleted = false;
       server.on("DELETE", /\/statements\/q9$/, () => {
@@ -527,7 +527,7 @@ describe("statements (§6)", () => {
   test("execution_error is a 422 with the statement's id (§11)", async () => {
     const server = new FakeServer();
     server.on("POST", /\/statements$/, () =>
-      problem(422, "execution_error", { sqlstate: "22012" }, { "warp-statement-id": "q3" }),
+      problem(422, "execution_error", { sqlstate: "22012" }, { "chargewire-statement-id": "q3" }),
     );
     const conn = await open(server);
     const err = await expectCode(conn.query("SELECT 1/0"), ErrorCode.executionError);
@@ -566,12 +566,12 @@ describe("statements (§6)", () => {
   });
 });
 
-describe("Warp-Query-Tag (§2.5)", () => {
+describe("Chargewire-Query-Tag (§2.5)", () => {
   test("the tag is a JSON object in ASCII: other characters travel as \\u escapes", async () => {
     const server = new FakeServer();
     let tag: string | null = null;
     server.on("POST", /\/statements$/, (req) => {
-      tag = req.headers.get("warp-query-tag");
+      tag = req.headers.get("chargewire-query-tag");
       return json(200, doneDoc("q1", { kind: "update" }));
     });
     const conn = await open(server);
@@ -605,12 +605,12 @@ describe("Warp-Query-Tag (§2.5)", () => {
 });
 
 describe("User-Agent", () => {
-  test("Node sends warp-sql-js/<version>, the package's version, unless told otherwise", async () => {
+  test("Node sends chargewire-js/<version>, the package's version, unless told otherwise", async () => {
     const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as { version: string };
     expect(version).toBe(pkg.version);
     const server = new FakeServer();
     await open(server);
-    expect(server.requests.every((r) => r.headers.get("user-agent") === `warp-sql-js/${pkg.version}`)).toBe(true);
+    expect(server.requests.every((r) => r.headers.get("user-agent") === `chargewire-js/${pkg.version}`)).toBe(true);
     const custom = new FakeServer();
     await open(custom, { userAgent: "my-app/2" });
     expect(custom.requests.every((r) => r.headers.get("user-agent") === "my-app/2")).toBe(true);
@@ -630,7 +630,7 @@ describe("transport", () => {
         )) as unknown as typeof fetch;
       await expectCode(
         connect({
-          url: "warp://db.test:31337",
+          url: "chargewire://db.test:31337",
           username: "u",
           password: "p",
           fetch: failing,

@@ -1,11 +1,11 @@
-// Run: WARP_URL=warp://127.0.0.1:31337?tls=false WARP_USER=... WARP_PASSWORD=... node examples/node/quickstart.mjs
+// Run: CHARGEWIRE_URL=chargewire://127.0.0.1:31337?tls=false CHARGEWIRE_USER=... CHARGEWIRE_PASSWORD=... node examples/node/quickstart.mjs
 import { tableFromArrays } from "apache-arrow";
-import { WarpSqlError, connect } from "@gizmodata/warp-sql";
+import { ChargewireError, connect } from "@gizmodata/chargewire";
 
 const conn = await connect({
-  url: process.env.WARP_URL,
-  username: process.env.WARP_USER,
-  password: process.env.WARP_PASSWORD,
+  url: process.env.CHARGEWIRE_URL,
+  username: process.env.CHARGEWIRE_USER,
+  password: process.env.CHARGEWIRE_PASSWORD,
 });
 
 // A query, with bind parameters: an Arrow Table back.
@@ -28,7 +28,7 @@ try {
     signal: AbortSignal.timeout(1000),
   });
 } catch (err) {
-  if (!(err instanceof WarpSqlError)) throw err;
+  if (!(err instanceof ChargewireError)) throw err;
   console.log(`${err.code}: ${err.message}`);
 }
 

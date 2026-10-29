@@ -4,7 +4,7 @@ import type { Schema, Table } from "apache-arrow";
 
 import { type IpcCompression, ipcCompressions } from "./compression.js";
 import { Core, type StatementSettings } from "./core.js";
-import { ErrorCode, WarpSqlError, invalidArgument, protocolError } from "./errors.js";
+import { ErrorCode, ChargewireError, invalidArgument, protocolError } from "./errors.js";
 import {
   type Credentials,
   HttpClient,
@@ -48,7 +48,7 @@ export interface StatementOptions {
   statementTimeoutMs?: number;
   /**
    * A JSON object the server may record with the statement, for observability
-   * (`Warp-Query-Tag`, §2.5). Sent as ASCII JSON (other characters as `\u` escapes), at
+   * (`Chargewire-Query-Tag`, §2.5). Sent as ASCII JSON (other characters as `\u` escapes), at
    * most 4,096 bytes; a larger tag is refused before anything is sent.
    */
   queryTag?: Record<string, unknown>;
@@ -76,14 +76,14 @@ export interface CallOptions extends StatementOptions {
 }
 
 export interface ConnectOptions extends StatementOptions {
-  /** `warp://host:port[/base][?tls=false]`, `https://host:port[/base]` or `http://host:port[/base]`. */
+  /** `chargewire://host:port[/base][?tls=false]`, `https://host:port[/base]` or `http://host:port[/base]`. */
   url: string;
   /** With `password`: the password grant (§4.1). */
   username?: string;
   password?: string;
-  /** A Warp SQL access token obtained elsewhere; used as is, never renewed. */
+  /** A Chargewire access token obtained elsewhere; used as is, never renewed. */
   token?: string;
-  /** Returns a fresh Warp SQL access token; called at connect and whenever the server refuses the current one. */
+  /** Returns a fresh Chargewire access token; called at connect and whenever the server refuses the current one. */
   tokenProvider?: () => string | Promise<string>;
   /** An identity provider's token (e.g. an OIDC ID token) for the `token_exchange` grant; a function is called for each new token. */
   subjectToken?: string | (() => string | Promise<string>);
@@ -135,7 +135,7 @@ export interface ConnectOptions extends StatementOptions {
   resultBufferBytes?: number;
   /** Diagnostics; `warn` defaults to console.warn (session replacements are reported there). */
   logger?: Logger;
-  /** The User-Agent header (Node, Deno, Bun; browsers set their own). Default `warp-sql-js/<version>` there. */
+  /** The User-Agent header (Node, Deno, Bun; browsers set their own). Default `chargewire-js/<version>` there. */
   userAgent?: string;
   /** URL schemes accepted, for wrappers that add their own (see `defaultSchemes`). */
   schemes?: SchemeMap;
@@ -161,7 +161,7 @@ export interface IngestOptions {
  * Opens a connection: discovers the server (§3.1), signs in (§4), and opens a session (§5).
  *
  * ```ts
- * const conn = await connect({ url: "warp://db.example.com:31337", username: "joe", password });
+ * const conn = await connect({ url: "chargewire://db.example.com:31337", username: "joe", password });
  * ```
  */
 export async function connect(options: ConnectOptions): Promise<Connection> {
@@ -207,14 +207,14 @@ export async function connect(options: ConnectOptions): Promise<Connection> {
     debug: options.logger?.debug?.bind(options.logger),
     warn: options.logger
       ? options.logger.warn?.bind(options.logger)
-      : (message, fields) => console.warn(`[warp-sql] ${message}`, fields ?? ""),
+      : (message, fields) => console.warn(`[chargewire] ${message}`, fields ?? ""),
   };
   const http = new HttpClient({
     base,
     fetch: fetchFn,
     credentials,
     maxAttempts: options.maxAttempts ?? 4,
-    userAgent: options.userAgent ?? (platform.name === "node" ? `warp-sql-js/${version}` : undefined),
+    userAgent: options.userAgent ?? (platform.name === "node" ? `chargewire-js/${version}` : undefined),
     logger,
     fetchCredentials:
       options.fetchCredentials ??
@@ -239,7 +239,7 @@ export async function connect(options: ConnectOptions): Promise<Connection> {
     credentials.kind === "certificate" &&
     !(discovery.capabilities?.includes(Capability.mtlsIdentity) === true && grants?.includes(grant!) === true)
   ) {
-    throw new WarpSqlError({
+    throw new ChargewireError({
       code: ErrorCode.notImplemented,
       message:
         `the server does not offer client certificate sign-in (capability ${Capability.mtlsIdentity}, ` +
@@ -248,13 +248,13 @@ export async function connect(options: ConnectOptions): Promise<Connection> {
     });
   }
   if (credentials.kind === "browser" && discovery.capabilities?.includes(Capability.oauthBrowser) !== true) {
-    throw new WarpSqlError({
+    throw new ChargewireError({
       code: ErrorCode.notImplemented,
       message: `the server does not offer browser sign-in (capability ${Capability.oauthBrowser})`,
     });
   }
   if (grant !== undefined && Array.isArray(grants) && !grants.includes(grant)) {
-    throw new WarpSqlError({
+    throw new ChargewireError({
       code: ErrorCode.notImplemented,
       message: `the server does not accept the ${grant} grant (it offers ${grants.join(", ") || "none"})`,
     });
@@ -363,19 +363,19 @@ async function discover(
     rttMs = performance.now() - start;
     doc = await decodeJSON<DiscoveryDocument>(resp, req);
   } catch (err) {
-    if (WarpSqlError.is(err, ErrorCode.clientProtocolError, ErrorCode.clientHttpError, ErrorCode.notFound)) {
-      throw protocolError(`${http.base.href} does not describe a Warp SQL server: ${(err as Error).message}`, err);
+    if (ChargewireError.is(err, ErrorCode.clientProtocolError, ErrorCode.clientHttpError, ErrorCode.notFound)) {
+      throw protocolError(`${http.base.href} does not describe a Chargewire server: ${(err as Error).message}`, err);
     }
     throw err;
   }
-  if (doc === null || typeof doc !== "object" || doc.protocol !== "warp-sql") {
+  if (doc === null || typeof doc !== "object" || doc.protocol !== "chargewire") {
     throw protocolError(
-      `${http.base.href} does not describe a Warp SQL server (protocol ${JSON.stringify(doc?.protocol)})`,
+      `${http.base.href} does not describe a Chargewire server (protocol ${JSON.stringify(doc?.protocol)})`,
     );
   }
   if (!Array.isArray(doc.protocol_versions) || !doc.protocol_versions.includes("1")) {
     throw protocolError(
-      `the server at ${http.base.href} does not speak Warp SQL version 1 (it offers ${JSON.stringify(doc.protocol_versions)})`,
+      `the server at ${http.base.href} does not speak Chargewire version 1 (it offers ${JSON.stringify(doc.protocol_versions)})`,
     );
   }
   return { discovery: doc, rttMs };
@@ -431,7 +431,7 @@ function resolveSettings(defaults: StatementSettings, options: StatementOptions)
 }
 
 /**
- * A connection to a Warp SQL server: one session (§5), with its options, its open
+ * A connection to a Chargewire server: one session (§5), with its options, its open
  * transaction and its temporary tables. Safe to share between concurrent calls; the
  * server runs a session's statements one at a time.
  */
@@ -687,11 +687,11 @@ export class Connection {
   }
 }
 
-/** The most bytes a `Warp-Query-Tag` may have (§2.5). */
+/** The most bytes a `Chargewire-Query-Tag` may have (§2.5). */
 export const maxQueryTagBytes = 4096;
 
 /**
- * Serializes a query tag for `Warp-Query-Tag` (§2.5): a JSON object, in ASCII (every other
+ * Serializes a query tag for `Chargewire-Query-Tag` (§2.5): a JSON object, in ASCII (every other
  * character as a `\u` escape, so a header can carry it), at most 4,096 bytes.
  */
 export function queryTagHeader(tag: unknown): string {
@@ -830,7 +830,12 @@ export class PreparedStatement {
       });
     } catch (err) {
       if (
-        !WarpSqlError.is(err, ErrorCode.preparedNotFound, ErrorCode.sessionNotFound, ErrorCode.clientConnectionClosed)
+        !ChargewireError.is(
+          err,
+          ErrorCode.preparedNotFound,
+          ErrorCode.sessionNotFound,
+          ErrorCode.clientConnectionClosed,
+        )
       )
         throw err;
     }
@@ -883,8 +888,8 @@ export class PreparedStatement {
       return await run(new Execution(this.#core, settings, body, ref, signal));
     } catch (err) {
       const gone =
-        WarpSqlError.is(err, ErrorCode.preparedNotFound) ||
-        (WarpSqlError.is(err) && err.replacementSessionId !== undefined);
+        ChargewireError.is(err, ErrorCode.preparedNotFound) ||
+        (ChargewireError.is(err) && err.replacementSessionId !== undefined);
       if (!gone || body.stream !== undefined || this.#core.session.inTransaction || signal?.aborted) throw err;
       await this.#reprepare(signal);
       return run(new Execution(this.#core, settings, body, this.#ref, signal));

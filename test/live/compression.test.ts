@@ -72,8 +72,8 @@ describe("compressed results (§8.2)", () => {
         else expect(arrow.filter(isSubmitOf("hash(i)")).length).toBe(1);
         const prefixes: number[] = [];
         for (const r of arrow) {
-          expect(r.headers["warp-ipc-compression"]).toBe(codec);
-          expect(r.answerHeaders?.["warp-ipc-compression"]).toBe(codec);
+          expect(r.headers["chargewire-ipc-compression"]).toBe(codec);
+          expect(r.answerHeaders?.["chargewire-ipc-compression"]).toBe(codec);
           const seen = bodyBuffers(r.answer!);
           expect(seen.codecs).toEqual(new Set([codec === "zstd" ? CompressionType.ZSTD : CompressionType.LZ4_FRAME]));
           prefixes.push(...seen.prefixes);
@@ -92,8 +92,8 @@ describe("compressed results (§8.2)", () => {
     const conn = await open({ resultPartitions: 1 }, proxy.info);
     expect(await scalar(conn, "SELECT count(*) FROM range(10)")).toBe(10);
     const submit = proxy.requests(isSubmitOf("range(10)"))[0]!;
-    expect(submit.headers["warp-ipc-compression"]).toBeUndefined();
-    expect(submit.answerHeaders?.["warp-ipc-compression"] ?? "none").toBe("none");
+    expect(submit.headers["chargewire-ipc-compression"]).toBeUndefined();
+    expect(submit.answerHeaders?.["chargewire-ipc-compression"] ?? "none").toBe("none");
     expect(bodyBuffers(submit.answer!).codecs).toEqual(new Set([undefined]));
   });
 
@@ -101,6 +101,6 @@ describe("compressed results (§8.2)", () => {
     const proxy = await FaultProxy.start();
     const conn = await open({ ipcCompression: "auto", resultPartitions: 1 }, proxy.info);
     expect(await scalar(conn, "SELECT count(*) FROM range(10)")).toBe(10);
-    expect(proxy.requests(isSubmitOf("range(10)"))[0]!.headers["warp-ipc-compression"]).toBe("lz4_frame");
+    expect(proxy.requests(isSubmitOf("range(10)"))[0]!.headers["chargewire-ipc-compression"]).toBe("lz4_frame");
   });
 });

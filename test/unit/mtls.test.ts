@@ -2,7 +2,7 @@
 // sent, the capability check, and the certificate error codes.
 import { describe, expect, test } from "vitest";
 
-import { ErrorCode, WarpSqlError, connect } from "../../src/index.js";
+import { ErrorCode, ChargewireError, connect } from "../../src/index.js";
 import { FakeServer, json, problem } from "./fake.js";
 
 const quiet = { warn: () => {} };
@@ -11,9 +11,9 @@ const quiet = { warn: () => {} };
 function certificateServer(): FakeServer {
   const server = new FakeServer();
   server.capabilities = [...server.capabilities, "mtls_identity"];
-  server.on("GET", /^\/warp$/, () =>
+  server.on("GET", /^\/chargewire$/, () =>
     json(200, {
-      protocol: "warp-sql",
+      protocol: "chargewire",
       protocol_versions: ["1"],
       capabilities: server.capabilities,
       auth: { grant_types: ["password", "client_certificate"] },
@@ -24,21 +24,21 @@ function certificateServer(): FakeServer {
 
 const openCertificate = (server: FakeServer, extra: Record<string, unknown> = {}) =>
   connect({
-    url: "warp://db.test:31337",
+    url: "chargewire://db.test:31337",
     authType: "client_certificate",
     fetch: server.fetch,
     logger: quiet,
     ...extra,
   });
 
-async function expectCode(work: Promise<unknown>, code: string): Promise<WarpSqlError> {
+async function expectCode(work: Promise<unknown>, code: string): Promise<ChargewireError> {
   const err = await work.then(
     () => undefined,
     (e: unknown) => e,
   );
-  expect(err).toBeInstanceOf(WarpSqlError);
-  expect((err as WarpSqlError).code, String(err)).toBe(code);
-  return err as WarpSqlError;
+  expect(err).toBeInstanceOf(ChargewireError);
+  expect((err as ChargewireError).code, String(err)).toBe(code);
+  return err as ChargewireError;
 }
 
 describe("client certificate sign-in (§4.4)", () => {
@@ -78,7 +78,7 @@ describe("client certificate sign-in (§4.4)", () => {
   test("plain HTTP is refused before anything is sent", async () => {
     const server = certificateServer();
     const err = await expectCode(
-      openCertificate(server, { url: "warp://db.test:31337?tls=false" }),
+      openCertificate(server, { url: "chargewire://db.test:31337?tls=false" }),
       ErrorCode.clientInvalidArgument,
     );
     expect(err.message).toContain("needs TLS");
@@ -87,12 +87,12 @@ describe("client certificate sign-in (§4.4)", () => {
 
   test("in Node it needs tls.cert and tls.key, and they go together", async () => {
     const err = await expectCode(
-      connect({ url: "warp://db.test:31337", authType: "client_certificate", logger: quiet }),
+      connect({ url: "chargewire://db.test:31337", authType: "client_certificate", logger: quiet }),
       ErrorCode.clientInvalidArgument,
     );
     expect(err.message).toContain("set tls.cert and tls.key");
     const half = await expectCode(
-      connect({ url: "warp://db.test:31337", authType: "client_certificate", tls: { cert: "x" }, logger: quiet }),
+      connect({ url: "chargewire://db.test:31337", authType: "client_certificate", tls: { cert: "x" }, logger: quiet }),
       ErrorCode.clientInvalidArgument,
     );
     expect(half.message).toContain("tls.cert and tls.key go together");
@@ -100,7 +100,7 @@ describe("client certificate sign-in (§4.4)", () => {
 
   test("an unknown authType is refused", async () => {
     const err = await expectCode(
-      connect({ url: "warp://db.test:31337", authType: "kerberos" as never, logger: quiet }),
+      connect({ url: "chargewire://db.test:31337", authType: "kerberos" as never, logger: quiet }),
       ErrorCode.clientInvalidArgument,
     );
     expect(err.message).toContain('"password", "client_certificate" or "oauth_browser"');
@@ -129,7 +129,9 @@ describe("client certificate sign-in (§4.4)", () => {
     ]) {
       // At sign-in.
       const atSignIn = certificateServer();
-      atSignIn.on("POST", /^\/warp\/v1\/auth\/token$/, () => problem(401, code, {}, { "www-authenticate": "Bearer" }));
+      atSignIn.on("POST", /^\/chargewire\/v1\/auth\/token$/, () =>
+        problem(401, code, {}, { "www-authenticate": "Bearer" }),
+      );
       const err = await expectCode(openCertificate(atSignIn), code);
       expect(err.status).toBe(401);
       // On a statement: the token is not the problem, so it is not renewed.

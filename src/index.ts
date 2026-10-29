@@ -2,7 +2,7 @@
 
 /**
  * @packageDocumentation
- * A client for the Warp SQL protocol (https://github.com/gizmodata/warp-sql): SQL over
+ * A client for the Chargewire protocol (https://github.com/gizmodata/chargewire): SQL over
  * plain HTTP, with results, parameters and uploads as Apache Arrow IPC streams.
  */
 
@@ -34,13 +34,13 @@ export {
 export { Metadata, type ColumnInfo, type MetadataCallOptions } from "./metadata.js";
 export {
   ErrorCode,
-  WarpSqlError,
+  ChargewireError,
   type CancelReason,
   type InvalidTokenReason,
   type KnownErrorCode,
   type ProblemDocument,
   type SessionEndedReason,
-  type WarpSqlErrorInit,
+  type ChargewireErrorInit,
 } from "./errors.js";
 export type { JsonScalar, Parameters } from "./params.js";
 export type { ArrowInput } from "./ipc.js";

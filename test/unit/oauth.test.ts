@@ -4,7 +4,7 @@ import { describe, expect, test } from "vitest";
 
 import {
   ErrorCode,
-  WarpSqlError,
+  ChargewireError,
   beginBrowserRedirectSignIn,
   browserSignIn,
   browserSignInProvider,
@@ -17,27 +17,27 @@ import {
 import { FakeServer, type FakeRequest, json, problem } from "./fake.js";
 
 const quiet = { warn: () => {} };
-const url = "warp://db.test:31337";
+const url = "chargewire://db.test:31337";
 const secret = "pollsecretpollsecretpollsecret";
 const authorizeUrl = "https://idp.test/authorize?state=abc";
 
-async function expectCode(work: Promise<unknown>, code: string): Promise<WarpSqlError> {
+async function expectCode(work: Promise<unknown>, code: string): Promise<ChargewireError> {
   const err = await work.then(
     () => undefined,
     (e: unknown) => e,
   );
-  expect(err).toBeInstanceOf(WarpSqlError);
-  expect((err as WarpSqlError).code, String(err)).toBe(code);
-  return err as WarpSqlError;
+  expect(err).toBeInstanceOf(ChargewireError);
+  expect((err as ChargewireError).code, String(err)).toBe(code);
+  return err as ChargewireError;
 }
 
 /** A fake server with browser sign-in: each flow completes after `pendingPolls` pending answers. */
 function browserServer(opts: { pendingPolls?: number; outcome?: "complete" | "failed" } = {}) {
   const server = new FakeServer();
   server.capabilities = [...server.capabilities, "oauth_browser"];
-  server.on("GET", /^\/warp$/, () =>
+  server.on("GET", /^\/chargewire$/, () =>
     json(200, {
-      protocol: "warp-sql",
+      protocol: "chargewire",
       protocol_versions: ["1"],
       capabilities: server.capabilities,
       auth: { grant_types: ["password"], oauth_browser: { provider: "Okta" } },
@@ -46,7 +46,7 @@ function browserServer(opts: { pendingPolls?: number; outcome?: "complete" | "fa
   let flows = 0;
   const polls = new Map<string, number>();
   const collected = new Set<string>();
-  server.on("POST", /^\/warp\/v1\/auth\/oauth\/flows$/, () => {
+  server.on("POST", /^\/chargewire\/v1\/auth\/oauth\/flows$/, () => {
     const id = `f_${++flows}`;
     return json(
       201,
@@ -57,10 +57,10 @@ function browserServer(opts: { pendingPolls?: number; outcome?: "complete" | "fa
         poll_interval_s: 0.01,
         expires_at: "2099-01-01T00:00:00Z",
       },
-      { "cache-control": "no-store", location: `/warp/v1/auth/oauth/flows/${id}` },
+      { "cache-control": "no-store", location: `/chargewire/v1/auth/oauth/flows/${id}` },
     );
   });
-  server.on("POST", /^\/warp\/v1\/auth\/oauth\/flows\/([^/]+)$/, (req: FakeRequest, match) => {
+  server.on("POST", /^\/chargewire\/v1\/auth\/oauth\/flows\/([^/]+)$/, (req: FakeRequest, match) => {
     const id = match[1]!;
     const body = JSON.parse(req.body || "{}") as { poll_secret?: unknown };
     if (typeof body.poll_secret !== "string") return problem(400, "bad_request");
@@ -91,7 +91,7 @@ describe("browser sign-in, step by step (§4.3)", () => {
       expiresAt: "2099-01-01T00:00:00Z",
     });
     const created = server.requests.at(-1)!;
-    expect(created.url.pathname).toBe("/warp/v1/auth/oauth/flows");
+    expect(created.url.pathname).toBe("/chargewire/v1/auth/oauth/flows");
     expect(JSON.parse(created.body)).toEqual({ return_to: "/ui/?tab=1" });
     expect(created.headers.get("authorization")).toBeNull();
 
@@ -99,7 +99,7 @@ describe("browser sign-in, step by step (§4.3)", () => {
     expect(await pollBrowserSignIn({ url, fetch: server.fetch, flow })).toEqual({ state: "pending" });
     const done = await pollBrowserSignIn({ url, fetch: server.fetch, flow });
     expect(done).toEqual({ state: "complete", accessToken: "t1", expiresIn: 3600 });
-    for (const req of server.requests.filter((r) => r.url.pathname.startsWith("/warp/v1/auth/oauth/flows/"))) {
+    for (const req of server.requests.filter((r) => r.url.pathname.startsWith("/chargewire/v1/auth/oauth/flows/"))) {
       expect(req.method).toBe("POST");
       expect(req.url.href).not.toContain(secret); // never in the URL
       expect(req.headers.get("authorization")).toBeNull(); // nor in a header
@@ -124,7 +124,7 @@ describe("browser sign-in, step by step (§4.3)", () => {
   test("a flow state the client doesn't know is not terminal: it keeps polling (§12)", async () => {
     const server = browserServer();
     let polls = 0;
-    server.on("POST", /^\/warp\/v1\/auth\/oauth\/flows\/f_\d+$/, () =>
+    server.on("POST", /^\/chargewire\/v1\/auth\/oauth\/flows\/f_\d+$/, () =>
       ++polls < 3
         ? json(200, { state: "some_future_state" })
         : json(200, { state: "complete", access_token: "tz", token_type: "Bearer", expires_in: 60 }),
@@ -135,16 +135,16 @@ describe("browser sign-in, step by step (§4.3)", () => {
     expect(result).toEqual({ accessToken: "tz", expiresIn: 60 });
     expect(polls).toBe(3);
     // An answer with no state at all does not follow the protocol.
-    server.on("POST", /^\/warp\/v1\/auth\/oauth\/flows\/f_\d+$/, () => json(200, {}));
+    server.on("POST", /^\/chargewire\/v1\/auth\/oauth\/flows\/f_\d+$/, () => json(200, {}));
     await expectCode(pollBrowserSignIn({ url, fetch: server.fetch, flow }), ErrorCode.clientProtocolError);
   });
 
   test("a failed flow's error.code the client doesn't know is kept, a generic failure; one without a code is a protocol error", async () => {
     const server = browserServer();
-    server.on("POST", /^\/warp\/v1\/auth\/oauth\/flows\/f_1$/, () =>
+    server.on("POST", /^\/chargewire\/v1\/auth\/oauth\/flows\/f_1$/, () =>
       json(200, { state: "failed", error: { code: "some_future_failure", detail: "later" } }),
     );
-    server.on("POST", /^\/warp\/v1\/auth\/oauth\/flows\/f_2$/, () => json(200, { state: "failed", error: {} }));
+    server.on("POST", /^\/chargewire\/v1\/auth\/oauth\/flows\/f_2$/, () => json(200, { state: "failed", error: {} }));
     const first = await startBrowserSignIn({ url, fetch: server.fetch });
     const err = await expectCode(pollBrowserSignIn({ url, fetch: server.fetch, flow: first }), "some_future_failure");
     expect(err.detail).toBe("later");
@@ -180,7 +180,7 @@ describe("browser sign-in, step by step (§4.3)", () => {
   });
 
   test("the provider's name from discovery", () => {
-    const doc = { protocol: "warp-sql", protocol_versions: ["1"] };
+    const doc = { protocol: "chargewire", protocol_versions: ["1"] };
     expect(browserSignInProvider({ ...doc, auth: { oauth_browser: { provider: "Okta" } } })).toBe("Okta");
     expect(browserSignInProvider({ ...doc, auth: { oauth_browser: {} } })).toBeUndefined();
     expect(browserSignInProvider(doc)).toBeUndefined();
@@ -267,17 +267,17 @@ describe("browserSignIn and connect", () => {
 
 describe("pages that come back (§4.3.3)", () => {
   test("takeBrowserSignInFlowId reads and strips the fragment", () => {
-    expect(takeBrowserSignInFlowId("https://db.test/ui/?a=1#warp_oauth_flow=f_abc")).toEqual({
+    expect(takeBrowserSignInFlowId("https://db.test/ui/?a=1#chargewire_oauth_flow=f_abc")).toEqual({
       flowId: "f_abc",
       url: "https://db.test/ui/?a=1",
     });
-    expect(takeBrowserSignInFlowId("https://db.test/ui/#tab=2&warp_oauth_flow=f_abc")).toEqual({
+    expect(takeBrowserSignInFlowId("https://db.test/ui/#tab=2&chargewire_oauth_flow=f_abc")).toEqual({
       flowId: "f_abc",
       url: "https://db.test/ui/#tab=2",
     });
     expect(takeBrowserSignInFlowId("https://db.test/ui/")).toBeUndefined();
-    expect(takeBrowserSignInFlowId("https://db.test/ui/#warp_oauth_flow=")).toBeUndefined();
-    expect(takeBrowserSignInFlowId("https://db.test/ui/#warp_oauth_flow=..%2Fsessions")).toBeUndefined();
+    expect(takeBrowserSignInFlowId("https://db.test/ui/#chargewire_oauth_flow=")).toBeUndefined();
+    expect(takeBrowserSignInFlowId("https://db.test/ui/#chargewire_oauth_flow=..%2Fsessions")).toBeUndefined();
   });
 
   class MemoryStorage {
@@ -300,13 +300,13 @@ describe("pages that come back (§4.3.3)", () => {
     });
     expect(went).toEqual([authorizeUrl]);
     expect(JSON.parse(server.requests.at(-1)!.body)).toEqual({ return_to: "/ui/" });
-    expect([...storage.items.keys()]).toEqual(["warp-sql:browser-sign-in:f_1"]);
+    expect([...storage.items.keys()]).toEqual(["chargewire:browser-sign-in:f_1"]);
 
     const replaced: string[] = [];
     const result = await completeBrowserRedirectSignIn({
       url,
       fetch: server.fetch,
-      href: "https://db.test/ui/#warp_oauth_flow=f_1",
+      href: "https://db.test/ui/#chargewire_oauth_flow=f_1",
       storage,
       replaceUrl: (u) => void replaced.push(u),
     });
@@ -322,7 +322,7 @@ describe("pages that come back (§4.3.3)", () => {
     const base = { url, fetch: server.fetch, storage, replaceUrl: (u: string) => void replaced.push(u) };
     expect(await completeBrowserRedirectSignIn({ ...base, href: "https://db.test/ui/" })).toBeUndefined();
     expect(
-      await completeBrowserRedirectSignIn({ ...base, href: "https://db.test/ui/#warp_oauth_flow=f_9" }),
+      await completeBrowserRedirectSignIn({ ...base, href: "https://db.test/ui/#chargewire_oauth_flow=f_9" }),
     ).toBeUndefined();
     expect(replaced).toEqual(["https://db.test/ui/"]); // the fragment goes either way
     expect(server.requests).toHaveLength(0); // nothing polled for someone else's flow
@@ -336,7 +336,7 @@ describe("pages that come back (§4.3.3)", () => {
       completeBrowserRedirectSignIn({
         url,
         fetch: server.fetch,
-        href: "https://db.test/ui/#warp_oauth_flow=f_1",
+        href: "https://db.test/ui/#chargewire_oauth_flow=f_1",
         storage,
         replaceUrl: () => {},
       }),

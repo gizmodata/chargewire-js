@@ -18,7 +18,7 @@ export const platform: Platform = {
         ...(tls.servername !== undefined ? { servername: tls.servername } : {}),
         rejectUnauthorized: tls.skipVerify !== true,
         // With a client certificate, never resume TLS sessions: servers built on the
-        // warp-sql SDK (warp-duckdb, Hardcharger 0.2) verify client certificates without
+        // chargewire SDK (chargewire-duckdb, Hardcharger 0.2) verify client certificates without
         // an OpenSSL session id context, so every resumed handshake fails ("tlsv1 alert
         // internal error") and only each host's first connection would work.
         ...(tls.cert !== undefined ? { maxCachedSessions: 0 } : {}),

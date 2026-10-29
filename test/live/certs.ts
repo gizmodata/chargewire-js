@@ -13,7 +13,7 @@ import { join } from "node:path";
 // No vitest import: the browser tests' global setup (Playwright) makes certificates too.
 
 /** The identity (rfc822Name SAN) of makeCA's client certificate. */
-export const clientEmail = "warp-test-client@example.com";
+export const clientEmail = "chargewire-test-client@example.com";
 
 export interface ClientCertificate {
   certPem: string;
@@ -37,7 +37,7 @@ function openssl(dir: string, ...args: string[]): void {
 
 /** A CA in a fresh temporary directory, which `remove` deletes. */
 export function makeCAWithCleanup(): TestCA & { remove(): void } {
-  const dir = mkdtempSync(join(tmpdir(), "warp-sql-js-tls-"));
+  const dir = mkdtempSync(join(tmpdir(), "chargewire-js-tls-"));
   return { ...makeCAIn(dir), remove: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
@@ -54,7 +54,7 @@ function makeCAIn(dir: string): TestCA {
     "-out",
     "ca.pem",
     "-subj",
-    "/CN=warp-sql-js test CA",
+    "/CN=chargewire-js test CA",
     ...days,
     "-addext",
     "basicConstraints=critical,CA:TRUE",
@@ -83,7 +83,7 @@ function makeCAIn(dir: string): TestCA {
     );
   };
   issue("server", "localhost", "extendedKeyUsage=serverAuth\nsubjectAltName=IP:127.0.0.1,DNS:localhost");
-  issue("client", "warp_test", `extendedKeyUsage=clientAuth\nsubjectAltName=email:${clientEmail}`);
+  issue("client", "chargewire_test", `extendedKeyUsage=clientAuth\nsubjectAltName=email:${clientEmail}`);
   let issued = 0;
   return {
     caPem: readFileSync(join(dir, "ca.pem"), "utf8"),

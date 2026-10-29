@@ -5,7 +5,7 @@
 // collects the server's own access token once with the flow's poll secret. The poll secret
 // and the token are never logged and never put in a URL.
 
-import { ErrorCode, WarpSqlError, invalidArgument, protocolError } from "./errors.js";
+import { ErrorCode, ChargewireError, invalidArgument, protocolError } from "./errors.js";
 import { HttpClient, type Logger, jsonBody, sleep } from "./http.js";
 import { platform } from "#platform";
 import type { TlsOptions } from "./platform/types.js";
@@ -13,7 +13,7 @@ import type { DiscoveryDocument } from "./protocol.js";
 import { type SchemeMap, defaultSchemes, parseUrl } from "./url.js";
 
 /** The URL fragment key a `returnTo` redirect carries the flow id in (§4.3.3). */
-export const browserSignInFragmentKey = "warp_oauth_flow";
+export const browserSignInFragmentKey = "chargewire_oauth_flow";
 
 /** A browser sign-in flow (§4.3.1). `pollSecret` collects the token: keep it to yourself. */
 export interface BrowserSignInFlow {
@@ -43,7 +43,7 @@ export interface BrowserSignInResult {
 
 /** Which server to sign in to, and how to reach it. */
 export interface BrowserSignInTarget {
-  /** As `connect`'s url: `warp://host:port`, `https://…`, `http://…`. */
+  /** As `connect`'s url: `chargewire://host:port`, `https://…`, `http://…`. */
   url: string;
   schemes?: SchemeMap;
   /** The fetch to use (default: the global one). */
@@ -129,7 +129,7 @@ export async function startBrowserSignIn(
 }
 
 /**
- * Polls a flow once (§4.3.2). A failed sign-in throws a WarpSqlError whose code is the
+ * Polls a flow once (§4.3.2). A failed sign-in throws a ChargewireError whose code is the
  * flow's `error.code` (`access_denied`, `invalid_credentials`, `identity_provider_error`, or
  * one a later version adds, kept as sent: a generic failure, §12), with no `status`: the
  * poll itself succeeded. A flow that expired, was already collected or is given the wrong
@@ -174,7 +174,7 @@ export async function pollBrowserSignIn(
         throw protocolError(`the browser sign-in failed without an error code${detail ? `: ${detail}` : ""}`);
       }
       const code = error.code;
-      throw new WarpSqlError({ code, detail, message: `browser sign-in failed: ${detail || code} (${code})` });
+      throw new ChargewireError({ code, detail, message: `browser sign-in failed: ${detail || code} (${code})` });
     }
   }
   if (typeof answer["state"] !== "string") throw protocolError("the browser sign-in poll answer has no state");
@@ -203,7 +203,7 @@ export async function browserSignIn(
     const poll = await pollBrowserSignIn({ ...options, flow });
     if (poll.state === "complete") return { accessToken: poll.accessToken, expiresIn: poll.expiresIn };
     if (Date.now() >= deadline) {
-      throw new WarpSqlError({
+      throw new ChargewireError({
         code: ErrorCode.clientSignInTimeout,
         message: `the browser sign-in was not completed within ${Math.round(timeoutMs / 1000)} s`,
       });
@@ -236,7 +236,7 @@ export interface BrowserSignInStorage {
   removeItem(key: string): void;
 }
 
-const storageKey = (flowId: string): string => `warp-sql:browser-sign-in:${flowId}`;
+const storageKey = (flowId: string): string => `chargewire:browser-sign-in:${flowId}`;
 
 function pageStorage(given: BrowserSignInStorage | undefined): BrowserSignInStorage {
   if (given !== undefined) return given;
@@ -307,7 +307,10 @@ export async function completeBrowserRedirectSignIn(
     const poll = await pollBrowserSignIn({ ...options, flow: { flowId: taken.flowId, pollSecret } });
     if (poll.state === "complete") return { accessToken: poll.accessToken, expiresIn: poll.expiresIn };
     if (attempt >= 30) {
-      throw new WarpSqlError({ code: ErrorCode.clientSignInTimeout, message: "the browser sign-in did not complete" });
+      throw new ChargewireError({
+        code: ErrorCode.clientSignInTimeout,
+        message: "the browser sign-in did not complete",
+      });
     }
     await sleep(1000, options.signal);
   }

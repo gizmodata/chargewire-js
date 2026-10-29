@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { ErrorCode, WarpSqlError } from "../../src/index.js";
+import { ErrorCode, ChargewireError } from "../../src/index.js";
 import { parseRetryAfter, responseError, tokenRenewable } from "../../src/errors.js";
 
 const problem = (status: number, body: unknown, headers: Record<string, string> = {}): Response =>
@@ -15,7 +15,7 @@ describe("problem documents (§11)", () => {
       problem(
         403,
         {
-          type: "urn:warp-sql:error:permission_denied",
+          type: "urn:chargewire:error:permission_denied",
           title: "Permission denied",
           status: 403,
           code: "permission_denied",
@@ -26,7 +26,7 @@ describe("problem documents (§11)", () => {
         { "retry-after": "3" },
       ),
     );
-    expect(err).toBeInstanceOf(WarpSqlError);
+    expect(err).toBeInstanceOf(ChargewireError);
     expect(err).toMatchObject({
       code: "permission_denied",
       status: 403,
@@ -46,7 +46,7 @@ describe("problem documents (§11)", () => {
 
   test("an answer that is not a problem document is the client's own client_http_error, with its status", async () => {
     const err = await responseError(
-      new Response("<html>Bad gateway</html>", { status: 502, headers: { "warp-request-id": "r_9" } }),
+      new Response("<html>Bad gateway</html>", { status: 502, headers: { "chargewire-request-id": "r_9" } }),
     );
     expect(err.code).toBe(ErrorCode.clientHttpError);
     expect(err.status).toBe(502);
@@ -136,7 +136,7 @@ describe("problem documents (§11)", () => {
       problem(
         409,
         { code: "statement_cancelled", status: 409, cancel_reason: "privilege_revoked" },
-        { "warp-statement-id": "q_7" },
+        { "chargewire-statement-id": "q_7" },
       ),
     );
     expect(err).toMatchObject({
@@ -174,11 +174,11 @@ describe("problem documents (§11)", () => {
     expect(parseRetryAfter(null)).toBeUndefined();
   });
 
-  test("WarpSqlError.is checks the class and the code", () => {
-    const err = new WarpSqlError({ code: "sql_error" });
-    expect(WarpSqlError.is(err)).toBe(true);
-    expect(WarpSqlError.is(err, "sql_error", "x")).toBe(true);
-    expect(WarpSqlError.is(err, "x")).toBe(false);
-    expect(WarpSqlError.is(new Error("sql_error"), "sql_error")).toBe(false);
+  test("ChargewireError.is checks the class and the code", () => {
+    const err = new ChargewireError({ code: "sql_error" });
+    expect(ChargewireError.is(err)).toBe(true);
+    expect(ChargewireError.is(err, "sql_error", "x")).toBe(true);
+    expect(ChargewireError.is(err, "x")).toBe(false);
+    expect(ChargewireError.is(new Error("sql_error"), "sql_error")).toBe(false);
   });
 });

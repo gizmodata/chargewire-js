@@ -26,7 +26,7 @@ def plaintext() -> bytes:
 
     for _ in range(70_000):
         out.append(rand() & 0xFF)
-    words = [b"warp", b"sql", b"arrow", b"lz4", b"frame", b"block", b"hardcharger", b"duckdb", b"zstd", b"batch"]
+    words = [b"chargewire", b"sql", b"arrow", b"lz4", b"frame", b"block", b"hardcharger", b"duckdb", b"zstd", b"batch"]
     while len(out) < 70_000 + 150_000:
         out += words[rand() % len(words)] + b" "
     out += bytes(90_000)

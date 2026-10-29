@@ -6,7 +6,7 @@ import { Capability } from "./protocol.js";
 
 /** What a connection or call asks for (`ipcCompression`). */
 export type IpcCompression = "none" | "lz4_frame" | "zstd" | "auto";
-/** A codec named as in §8.2 and the Warp-IPC-Compression header. */
+/** A codec named as in §8.2 and the Chargewire-IPC-Compression header. */
 export type IpcCodec = "lz4_frame" | "zstd";
 
 export const ipcCompressions: readonly IpcCompression[] = ["none", "lz4_frame", "zstd", "auto"];

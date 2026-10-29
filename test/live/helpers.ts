@@ -7,7 +7,7 @@ import type { AddressInfo } from "node:net";
 import type { Table } from "apache-arrow";
 import { expect, inject, onTestFinished } from "vitest";
 
-import { type ConnectOptions, type Connection, WarpSqlError, connect } from "../../src/index.js";
+import { type ConnectOptions, type Connection, ChargewireError, connect } from "../../src/index.js";
 import { type ServerInfo, testUsername } from "./harness.js";
 
 export const shared: ServerInfo = inject("server");
@@ -18,7 +18,7 @@ export function reached(): void {
 }
 
 export function uri(info: ServerInfo = shared): string {
-  return info.scheme === "https" ? `warp://${info.host}` : `warp://${info.host}?tls=false`;
+  return info.scheme === "https" ? `chargewire://${info.host}` : `chargewire://${info.host}?tls=false`;
 }
 
 export const quiet = { warn: () => {} };
@@ -47,20 +47,20 @@ export async function open(options: Partial<ConnectOptions> = {}, info: ServerIn
   return conn;
 }
 
-/** Asserts that `work` fails with a WarpSqlError of `code`, and returns it. */
+/** Asserts that `work` fails with a ChargewireError of `code`, and returns it. */
 export async function expectCode(
   work: Promise<unknown> | (() => Promise<unknown>),
   code: string,
-): Promise<WarpSqlError> {
+): Promise<ChargewireError> {
   let caught: unknown;
   try {
     await (typeof work === "function" ? work() : work);
   } catch (err) {
     caught = err;
   }
-  expect(caught, "expected an error").toBeInstanceOf(WarpSqlError);
-  expect((caught as WarpSqlError).code, (caught as Error).message).toBe(code);
-  return caught as WarpSqlError;
+  expect(caught, "expected an error").toBeInstanceOf(ChargewireError);
+  expect((caught as ChargewireError).code, (caught as Error).message).toBe(code);
+  return caught as ChargewireError;
 }
 
 /** Number values of a column (bigints converted). */

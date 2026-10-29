@@ -3,7 +3,7 @@
 import { Type } from "apache-arrow";
 import { describe, expect, test } from "vitest";
 
-import { ErrorCode, WarpSqlError, connect } from "../../src/index.js";
+import { ErrorCode, ChargewireError, connect } from "../../src/index.js";
 import { serverName, testUsername } from "./harness.js";
 import { FaultProxy, expectCode, numbers, open, quiet, reached, scalar, shared } from "./helpers.js";
 
@@ -19,17 +19,17 @@ describe("queries", () => {
 
   test("every spelling of a plain-HTTP URL reaches the same server", async () => {
     for (const url of [
-      `warp://${shared.host}?tls=false`,
+      `chargewire://${shared.host}?tls=false`,
       `http://${shared.host}`,
-      `http://${shared.host}/warp`,
-      `http://${shared.host}/warp/`,
+      `http://${shared.host}/chargewire`,
+      `http://${shared.host}/chargewire/`,
     ]) {
       reached();
       const conn = await connect({ url, username: testUsername, password: shared.password, logger: quiet });
       expect(await scalar(conn, "SELECT 7")).toBe(7);
       await conn.close();
     }
-    // A base path the server doesn't serve is not a Warp SQL server.
+    // A base path the server doesn't serve is not a Chargewire server.
     await expectCode(
       connect({ url: `http://${shared.host}/nope`, username: testUsername, password: shared.password }),
       ErrorCode.clientProtocolError,
@@ -148,7 +148,7 @@ describe("queries", () => {
         const table = await conn.query("SELECT CAST(? AS VARCHAR) AS t", [value]);
         expect(table.get(0)!.t, String(value)).toBe(String(value)); // never a rounded double
       } catch (err) {
-        expect(WarpSqlError.is(err, ErrorCode.badRequest), String(err)).toBe(true);
+        expect(ChargewireError.is(err, ErrorCode.badRequest), String(err)).toBe(true);
       }
     }
   });
@@ -176,13 +176,13 @@ describe("queries", () => {
     expect((await conn.query("SELECT ?::DATE AS d", ["2026-10-17"])).numRows).toBe(1);
   });
 
-  test("a server error is a WarpSqlError with code, status, request id and the server's text", async () => {
+  test("a server error is a ChargewireError with code, status, request id and the server's text", async () => {
     const conn = await open();
     const err = await expectCode(conn.query("SELEC 1"), ErrorCode.sqlError);
     expect(err.status).toBe(400);
     expect(err.requestId).toMatch(/^r_/);
     expect(err.detail).toContain("Parser Error");
-    expect(err).toBeInstanceOf(WarpSqlError);
+    expect(err).toBeInstanceOf(ChargewireError);
     // The connection is fine afterwards.
     expect(await scalar(conn, "SELECT 1")).toBe(1);
   });

@@ -8,7 +8,7 @@ import {
 } from "apache-arrow";
 import { describe, expect, test, vi } from "vitest";
 
-import { ErrorCode, WarpSqlError } from "../../src/index.js";
+import { ErrorCode, ChargewireError } from "../../src/index.js";
 import {
   IpcScanner,
   ScannedBody,
@@ -189,7 +189,7 @@ describe("encoding uploads", () => {
   });
 
   test("inputs that are not Arrow are refused", async () => {
-    await expect(openInput({} as never)).rejects.toBeInstanceOf(WarpSqlError);
+    await expect(openInput({} as never)).rejects.toBeInstanceOf(ChargewireError);
     await expect(openInput([] as never)).rejects.toMatchObject({ code: ErrorCode.clientInvalidArgument });
     await expect(openInput([1] as never)).rejects.toMatchObject({ code: ErrorCode.clientInvalidArgument });
   });

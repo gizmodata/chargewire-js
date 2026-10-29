@@ -1,13 +1,13 @@
-name: warp-sql-js-ci
+name: chargewire-js-ci
 
 # Lint, a real typecheck, unit tests on every supported Node, the package checks, and the
 # live suites against Hardcharger: Node (vitest), Deno, Bun, workerd (Cloudflare Workers),
 # and Chromium and WebKit (Playwright).
 #
-# The live suites need a Warp SQL server. They use the Hardcharger release image
+# The live suites need a Chargewire server. They use the Hardcharger release image
 # (ghcr.io/gizmodata/hardcharger), pulled with this workflow's GITHUB_TOKEN. While the image
 # is private that works only once the package grants this repository read access: on GitHub,
-# the hardcharger package's settings, "Manage Actions access", add gizmodata/warp-sql-js
+# the hardcharger package's settings, "Manage Actions access", add gizmodata/chargewire-js
 # (Read). Without it the `server` job fails, and so does every live job: they never skip.
 # Once the image is public the login is unnecessary but harmless.
 
@@ -119,16 +119,16 @@ jobs:
         node: [22, 24]
     runs-on: ubuntu-24.04
     env:
-      WARP_SQL_JS_TEST_SERVER_PASSWORD_ENV: HARDCHARGER_ADMIN_PASSWORD
-      WARP_SQL_JS_TEST_SERVER_USERNAME_FLAG: --admin-username
-      WARP_SQL_JS_TEST_SERVER_MTLS_FLAG: --mtls-ca-cert
-      WARP_SQL_JS_TEST_SERVER_CORS_FLAG: --cors-origins
-      WARP_SQL_JS_TEST_SERVER_NAME: Hardcharger
+      CHARGEWIRE_JS_TEST_SERVER_PASSWORD_ENV: HARDCHARGER_ADMIN_PASSWORD
+      CHARGEWIRE_JS_TEST_SERVER_USERNAME_FLAG: --admin-username
+      CHARGEWIRE_JS_TEST_SERVER_MTLS_FLAG: --mtls-ca-cert
+      CHARGEWIRE_JS_TEST_SERVER_CORS_FLAG: --cors-origins
+      CHARGEWIRE_JS_TEST_SERVER_NAME: Hardcharger
       # Browser sign-in (test/live/oauth.test.ts): Hardcharger's flags for the mock provider.
-      WARP_SQL_JS_TEST_SERVER_OAUTH_ARGS: >-
+      CHARGEWIRE_JS_TEST_SERVER_OAUTH_ARGS: >-
         --token-allowed-issuer {issuer} --token-allowed-audience {client_id} --token-default-role admin
         --token-authorized-emails {identity} --oauth-client-id {client_id} --oauth-base-url http://127.0.0.1:{port}
-      WARP_SQL_JS_TEST_SERVER_OAUTH_SECRET_ENV: HARDCHARGER_OAUTH_CLIENT_SECRET
+      CHARGEWIRE_JS_TEST_SERVER_OAUTH_SECRET_ENV: HARDCHARGER_OAUTH_CLIENT_SECRET
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -141,7 +141,7 @@ jobs:
       - name: Unpack the server
         run: |
           tar -C "$RUNNER_TEMP" -xzf hardcharger.tar.gz
-          echo "WARP_SQL_JS_TEST_SERVER_BINARY=$RUNNER_TEMP/hardcharger/bin/hardcharger-server" >> "$GITHUB_ENV"
+          echo "CHARGEWIRE_JS_TEST_SERVER_BINARY=$RUNNER_TEMP/hardcharger/bin/hardcharger-server" >> "$GITHUB_ENV"
       - run: npm ci
       - name: Live tests
         run: npm run test:live
@@ -151,8 +151,8 @@ jobs:
     needs: server
     runs-on: ubuntu-24.04
     env:
-      WARP_SQL_JS_TEST_SERVER_PASSWORD_ENV: HARDCHARGER_ADMIN_PASSWORD
-      WARP_SQL_JS_TEST_SERVER_USERNAME_FLAG: --admin-username
+      CHARGEWIRE_JS_TEST_SERVER_PASSWORD_ENV: HARDCHARGER_ADMIN_PASSWORD
+      CHARGEWIRE_JS_TEST_SERVER_USERNAME_FLAG: --admin-username
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -171,7 +171,7 @@ jobs:
       - name: Unpack the server
         run: |
           tar -C "$RUNNER_TEMP" -xzf hardcharger.tar.gz
-          echo "WARP_SQL_JS_TEST_SERVER_BINARY=$RUNNER_TEMP/hardcharger/bin/hardcharger-server" >> "$GITHUB_ENV"
+          echo "CHARGEWIRE_JS_TEST_SERVER_BINARY=$RUNNER_TEMP/hardcharger/bin/hardcharger-server" >> "$GITHUB_ENV"
       - run: npm ci
       - run: npm run build
       - name: Node, Deno, Bun and workerd smoke tests
@@ -182,9 +182,9 @@ jobs:
     needs: server
     runs-on: ubuntu-24.04
     env:
-      WARP_SQL_JS_TEST_SERVER_PASSWORD_ENV: HARDCHARGER_ADMIN_PASSWORD
-      WARP_SQL_JS_TEST_SERVER_USERNAME_FLAG: --admin-username
-      WARP_SQL_JS_TEST_SERVER_CORS_FLAG: --cors-origins
+      CHARGEWIRE_JS_TEST_SERVER_PASSWORD_ENV: HARDCHARGER_ADMIN_PASSWORD
+      CHARGEWIRE_JS_TEST_SERVER_USERNAME_FLAG: --admin-username
+      CHARGEWIRE_JS_TEST_SERVER_CORS_FLAG: --cors-origins
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -197,7 +197,7 @@ jobs:
       - name: Unpack the server
         run: |
           tar -C "$RUNNER_TEMP" -xzf hardcharger.tar.gz
-          echo "WARP_SQL_JS_TEST_SERVER_BINARY=$RUNNER_TEMP/hardcharger/bin/hardcharger-server" >> "$GITHUB_ENV"
+          echo "CHARGEWIRE_JS_TEST_SERVER_BINARY=$RUNNER_TEMP/hardcharger/bin/hardcharger-server" >> "$GITHUB_ENV"
       - run: npm ci
       - run: npx playwright install --with-deps chromium webkit
       - run: npm run build

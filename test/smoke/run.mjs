@@ -1,6 +1,6 @@
-// Runs smoke.mjs under each runtime in WARP_SQL_JS_SMOKE_RUNTIMES (default: node,deno,bun,workerd;
+// Runs smoke.mjs under each runtime in CHARGEWIRE_JS_SMOKE_RUNTIMES (default: node,deno,bun,workerd;
 // workerd runs worker.mjs in Cloudflare's runtime through Miniflare)
-// against a server started from WARP_SQL_JS_TEST_SERVER_BINARY. A missing runtime, a
+// against a server started from CHARGEWIRE_JS_TEST_SERVER_BINARY. A missing runtime, a
 // missing server or a failed check fails the run. Needs a build (npm run build) and Node
 // that runs TypeScript (22.18 or later), for the shared harness.
 import { spawnSync } from "node:child_process";
@@ -10,12 +10,12 @@ import { launchServer } from "../live/harness.ts";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
 const script = fileURLToPath(new URL("./smoke.mjs", import.meta.url));
-const runtimes = (process.env.WARP_SQL_JS_SMOKE_RUNTIMES ?? "node,deno,bun,workerd").split(",").filter(Boolean);
+const runtimes = (process.env.CHARGEWIRE_JS_SMOKE_RUNTIMES ?? "node,deno,bun,workerd").split(",").filter(Boolean);
 const server = await launchServer();
 const env = {
   ...process.env,
-  WARP_SQL_JS_SMOKE_URL: `warp://${server.host}?tls=false`,
-  WARP_SQL_JS_SMOKE_PASSWORD: server.password,
+  CHARGEWIRE_JS_SMOKE_URL: `chargewire://${server.host}?tls=false`,
+  CHARGEWIRE_JS_SMOKE_PASSWORD: server.password,
 };
 const commands = {
   node: ["node", [script]],
@@ -24,7 +24,7 @@ const commands = {
   deno: [
     "deno",
     ["run", "--allow-net", "--allow-env", "--allow-read", script],
-    { WARP_SQL_JS_SMOKE_IMPORT: `${root}/dist/node/index.mjs` },
+    { CHARGEWIRE_JS_SMOKE_IMPORT: `${root}/dist/node/index.mjs` },
   ],
 };
 let failed = 0;
@@ -77,7 +77,7 @@ async function runWorker() {
     modules: true,
     script: bundle.outputFiles[0].text,
     compatibilityDate: "2026-07-01",
-    bindings: { WARP_URL: `http://${server.host}`, WARP_PASSWORD: server.password },
+    bindings: { CHARGEWIRE_URL: `http://${server.host}`, CHARGEWIRE_PASSWORD: server.password },
   });
   try {
     const resp = await mf.dispatchFetch("http://worker.test/");

@@ -20,7 +20,7 @@ function plaintext(): Uint8Array {
     return x >>> 16;
   };
   for (let i = 0; i < 70_000; i++) out.push(rand() & 0xff);
-  const words = ["warp", "sql", "arrow", "lz4", "frame", "block", "hardcharger", "duckdb", "zstd", "batch"];
+  const words = ["chargewire", "sql", "arrow", "lz4", "frame", "block", "hardcharger", "duckdb", "zstd", "batch"];
   while (out.length < 220_000) for (const c of `${words[rand() % words.length]} `) out.push(c.charCodeAt(0));
   for (let i = 0; i < 90_000; i++) out.push(0);
   for (let r = 0; r < 1500; r++) for (let i = 0; i < 40; i++) out.push(i);
@@ -157,7 +157,7 @@ describe("LZ4_FRAME Arrow IPC (§8.2)", () => {
 
   test("a server's stream with buffers left uncompressed (length -1) reads back exactly", () => {
     // Hardcharger's answer to SELECT i, hash(i)::DOUBLE AS h, CASE WHEN i % 3 = 0 THEN NULL
-    // ELSE i END AS n, 'v' || i AS s FROM range(2000) t(i), with Warp-IPC-Compression: lz4_frame.
+    // ELSE i END AS n, 'v' || i AS s FROM range(2000) t(i), with Chargewire-IPC-Compression: lz4_frame.
     const bytes = fixture("server_lz4_frame.arrows");
     const prefixes = bufferPrefixes(bytes);
     expect(prefixes.filter((p) => p === -1).length).toBeGreaterThan(0); // the incompressible doubles

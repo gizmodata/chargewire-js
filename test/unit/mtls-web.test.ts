@@ -2,7 +2,7 @@
 // credentials "include", and Node's tls settings are refused.
 import { describe, expect, test, vi } from "vitest";
 
-import { ErrorCode, WarpSqlError, connect } from "../../src/index.js";
+import { ErrorCode, ChargewireError, connect } from "../../src/index.js";
 import { FakeServer, json } from "./fake.js";
 
 vi.mock("#platform", async () => import("../../src/platform/web.js"));
@@ -11,9 +11,9 @@ const quiet = { warn: () => {} };
 
 function certificateServer(): FakeServer {
   const server = new FakeServer();
-  server.on("GET", /^\/warp$/, () =>
+  server.on("GET", /^\/chargewire$/, () =>
     json(200, {
-      protocol: "warp-sql",
+      protocol: "chargewire",
       protocol_versions: ["1"],
       capabilities: [...server.capabilities, "mtls_identity"],
       auth: { grant_types: ["password", "client_certificate"] },
@@ -74,8 +74,8 @@ describe("client certificate sign-in in a browser", () => {
       () => undefined,
       (e: unknown) => e,
     );
-    expect(err).toBeInstanceOf(WarpSqlError);
-    expect((err as WarpSqlError).code).toBe(ErrorCode.clientInvalidArgument);
-    expect((err as WarpSqlError).message).toContain("tls options apply in Node");
+    expect(err).toBeInstanceOf(ChargewireError);
+    expect((err as ChargewireError).code).toBe(ErrorCode.clientInvalidArgument);
+    expect((err as ChargewireError).message).toContain("tls options apply in Node");
   });
 });

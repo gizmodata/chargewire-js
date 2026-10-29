@@ -23,7 +23,7 @@ describe("TLS", () => {
     try {
       const conn = await open({ tls: { ca: ca.caPem } }, server);
       expect(await scalar(conn, "SELECT 1")).toBe(1);
-      expect(uri(server)).toBe(`warp://${server.host}`); // TLS is warp://'s default
+      expect(uri(server)).toBe(`chargewire://${server.host}`); // TLS is chargewire://'s default
       // Without the CA the certificate is unknown: a transport error, not retried.
       const started = Date.now();
       const err = await expectCode(open({}, server), ErrorCode.clientTransportError);
@@ -120,7 +120,7 @@ describe("authentication", () => {
       ErrorCode.clientInvalidArgument,
     );
     await expectCode(
-      connect({ url: `warp://joe:secret@${shared.host}?tls=false`, username: "joe", password: "x" }),
+      connect({ url: `chargewire://joe:secret@${shared.host}?tls=false`, username: "joe", password: "x" }),
       ErrorCode.clientInvalidArgument,
     );
   });
@@ -133,7 +133,7 @@ describe("authentication", () => {
     );
   });
 
-  test("something that is not a Warp SQL server is a protocol error", async () => {
+  test("something that is not a Chargewire server is a protocol error", async () => {
     const other = createServer((_req, res) => {
       res.writeHead(200, { "content-type": "application/json" });
       res.end('{"hello":"world"}');
@@ -145,7 +145,7 @@ describe("authentication", () => {
         connect({ url: `http://127.0.0.1:${port}`, username: "u", password: "p" }),
         ErrorCode.clientProtocolError,
       );
-      expect(err.message).toContain("does not describe a Warp SQL server");
+      expect(err.message).toContain("does not describe a Chargewire server");
     } finally {
       other.close();
     }
@@ -156,9 +156,9 @@ describe("authentication", () => {
       "",
       "db.example.com:31337",
       "ftp://h:1",
-      "warp://h:1?tls=maybe",
-      "warp://h:1?color=blue",
-      "warp://:1",
+      "chargewire://h:1?tls=maybe",
+      "chargewire://h:1?color=blue",
+      "chargewire://:1",
     ]) {
       await expectCode(connect({ url, username: "u", password: "p" }), ErrorCode.clientInvalidArgument);
     }

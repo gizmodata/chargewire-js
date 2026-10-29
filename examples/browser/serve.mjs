@@ -1,9 +1,9 @@
-// Serves the example page: bundles main.mjs (and with it @gizmodata/warp-sql's browser
+// Serves the example page: bundles main.mjs (and with it @gizmodata/chargewire's browser
 // build and Apache Arrow) with esbuild, then serves both on http://localhost:5173.
 //
 //   npm run build && npm run example:browser
 //
-// The Warp SQL server must allow the page's origin, e.g. warp-duckdb --cors-origin
+// The Chargewire server must allow the page's origin, e.g. chargewire-duckdb --cors-origin
 // http://localhost:5173 or hardcharger --cors-origins http://localhost:5173.
 
 import { readFile } from "node:fs/promises";

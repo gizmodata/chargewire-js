@@ -2,7 +2,7 @@
 //
 // Client certificate sign-in (§4.4) against a real server: servers that verify client
 // certificates and turn certificate sign-in on (--mtls-certificate-sign-in, with the test
-// client's identity as an admin identity), which warp-duckdb and Hardcharger share.
+// client's identity as an admin identity), which chargewire-duckdb and Hardcharger share.
 
 import { tableFromArrays } from "apache-arrow";
 import { Agent, fetch as undiciFetch } from "undici";
@@ -16,7 +16,7 @@ import { expectCode, open, quiet, reached, scalar, uri } from "./helpers.js";
 
 // The admin identity is written in another case: an e-mail identity matches ignoring ASCII
 // case (§4.4's recommended rule, which both servers follow).
-const adminIdentity = "Warp-Test-Client@Example.COM";
+const adminIdentity = "Chargewire-Test-Client@Example.COM";
 
 async function certificateServer(ca: TestCA, extra: string[] = []): Promise<RunningServer> {
   reached();
@@ -48,7 +48,7 @@ function certificate(ca: TestCA, cert = ca.clientCertPem, key = ca.clientKeyPem)
 async function certificateToken(server: RunningServer, ca: TestCA): Promise<string> {
   const agent = new Agent({ connect: { ca: ca.caPem, cert: ca.clientCertPem, key: ca.clientKeyPem } });
   try {
-    const resp = await undiciFetch(`https://${server.host}/warp/v1/auth/token`, {
+    const resp = await undiciFetch(`https://${server.host}/chargewire/v1/auth/token`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ grant_type: "client_certificate" }),
@@ -166,7 +166,7 @@ describe("client certificate sign-in (§4.4)", () => {
     const ca = makeCA();
     const server = await certificateServer(ca, ["--mtls-require-client-cert=false", "--mtls-require-identity-match"]);
     try {
-      // The admin user (warp_test) signs in with its password over the test client's certificate.
+      // The admin user (chargewire_test) signs in with its password over the test client's certificate.
       const err = await expectCode(
         open({ tls: { ca: ca.caPem, cert: ca.clientCertPem, key: ca.clientKeyPem } }, server),
         ErrorCode.certificateIdentityMismatch,

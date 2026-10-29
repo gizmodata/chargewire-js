@@ -1,6 +1,6 @@
 // Licensed under the Apache License, Version 2.0.
 
-import { ErrorCode, WarpSqlError, protocolError, responseError, tokenRenewable } from "./errors.js";
+import { ErrorCode, ChargewireError, protocolError, responseError, tokenRenewable } from "./errors.js";
 import { endpoint, redact } from "./url.js";
 
 export const mediaTypeJSON = "application/json";
@@ -141,7 +141,7 @@ export class HttpClient {
   }
 
   /**
-   * Sends a request and returns its 2xx answer. An error answer becomes a WarpSqlError.
+   * Sends a request and returns its 2xx answer. An error answer becomes a ChargewireError.
    *
    * Transport failures and 421/429/502/503/504 answers to idempotent requests are sent
    * again (honouring Retry-After), with backoff. A request refused with `invalid_token` is
@@ -216,11 +216,11 @@ export class HttpClient {
     const start = Date.now();
     req.onSend?.();
     const resp = await this.#fetch.call(globalThis, url, init);
-    this.logger.debug?.("warp request", {
+    this.logger.debug?.("chargewire request", {
       method: req.method,
       path: req.path,
       status: resp.status,
-      requestId: resp.headers.get("warp-request-id"),
+      requestId: resp.headers.get("chargewire-request-id"),
       ms: Date.now() - start,
     });
     return resp;
@@ -346,7 +346,7 @@ function certificateAlert(err: unknown): string | undefined {
   return undefined;
 }
 
-function transportError(req: HttpRequest, err: unknown): WarpSqlError {
+function transportError(req: HttpRequest, err: unknown): ChargewireError {
   const base = req.baseUrl ?? undefined;
   let reason = err instanceof Error ? err.message : String(err);
   const cause = (err as { cause?: unknown }).cause;
@@ -354,7 +354,7 @@ function transportError(req: HttpRequest, err: unknown): WarpSqlError {
   const code = (cause as { code?: unknown } | undefined)?.code;
   if (typeof code === "string" && !reason.includes(code)) reason += ` (${code})`;
   const alert = certificateAlert(err);
-  return new WarpSqlError({
+  return new ChargewireError({
     code: alert ?? ErrorCode.clientTransportError,
     message:
       `${req.method} ${req.path}${base ? ` on ${redact(base.href)}` : ""}: ` +
@@ -364,11 +364,11 @@ function transportError(req: HttpRequest, err: unknown): WarpSqlError {
 }
 
 /** The error for an operation its AbortSignal stopped. */
-export function abortError(signal: AbortSignal, statementId?: string): WarpSqlError {
+export function abortError(signal: AbortSignal, statementId?: string): ChargewireError {
   const reason: unknown = signal.reason;
-  if (reason instanceof WarpSqlError) return reason;
+  if (reason instanceof ChargewireError) return reason;
   const timeout = reason instanceof Error && reason.name === "TimeoutError";
-  return new WarpSqlError({
+  return new ChargewireError({
     code: timeout ? ErrorCode.statementTimeout : ErrorCode.statementCancelled,
     message: timeout
       ? "the operation timed out (its AbortSignal fired)"
@@ -385,7 +385,7 @@ export async function decodeJSON<T>(resp: Response, req?: HttpRequest): Promise<
     text = await resp.text();
   } catch (err) {
     if (req?.signal?.aborted) throw abortError(req.signal);
-    throw new WarpSqlError({
+    throw new ChargewireError({
       code: ErrorCode.clientTransportError,
       message: `reading the answer to ${req?.method ?? ""} ${req?.path ?? ""}`,
       cause: err,

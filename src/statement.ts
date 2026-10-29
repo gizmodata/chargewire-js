@@ -3,7 +3,7 @@
 import { Schema } from "apache-arrow";
 
 import type { Core, StatementSettings } from "./core.js";
-import { ErrorCode, WarpSqlError, problemError, protocolError } from "./errors.js";
+import { ErrorCode, ChargewireError, problemError, protocolError } from "./errors.js";
 import {
   type HttpRequest,
   type RequestBody,
@@ -24,7 +24,7 @@ export const longPollS = 15;
 export const maxResultPartitions = 256;
 
 /** The error inside a failed or cancelled statement document (§6.2). */
-export function statementError(doc: StatementDocument): WarpSqlError {
+export function statementError(doc: StatementDocument): ChargewireError {
   const cancelReason = doc.cancel_reason;
   if (doc.error !== undefined && doc.error !== null) {
     return problemError(doc.error, { statementId: doc.statement_id, cancelReason });
@@ -35,7 +35,7 @@ export function statementError(doc: StatementDocument): WarpSqlError {
         ? ErrorCode.statementTimeout
         : ErrorCode.statementCancelled
       : ErrorCode.executionError;
-  return new WarpSqlError({
+  return new ChargewireError({
     code,
     message: `statement ${doc.statement_id} ${doc.state}`,
     statementId: doc.statement_id,
@@ -69,7 +69,7 @@ export class Execution {
   /** The application cancelled the statement. */
   cancelled = false;
   /**
-   * The request said the client reads partitions held by other servers (`Warp-Result-Locations:
+   * The request said the client reads partitions held by other servers (`Chargewire-Result-Locations:
    * remote`, capability `result_locations`, §6.2). Without it, a partition's location must be null.
    */
   readonly remoteLocations: boolean;
@@ -112,10 +112,10 @@ export class Execution {
   }
 
   /** The error for a cancelled run. */
-  cancelledError(signal: AbortSignal = this.signal): WarpSqlError {
+  cancelledError(signal: AbortSignal = this.signal): ChargewireError {
     const source = this.#userSignal?.aborted ? this.#userSignal : signal.aborted ? signal : this.signal;
     if (!source.aborted) {
-      return new WarpSqlError({
+      return new ChargewireError({
         code: ErrorCode.statementCancelled,
         message: "the statement was cancelled",
         cancelReason: "client",
@@ -138,18 +138,18 @@ export class Execution {
     if (mode.arrow) headers["Accept"] = mediaTypeArrow;
     if (mode.async) headers["Prefer"] = "respond-async";
     else if (!mode.arrow) headers["Prefer"] = `wait=${longPollS}`;
-    if (s.retainResult !== undefined) headers["Warp-Retain-Result"] = String(s.retainResult);
+    if (s.retainResult !== undefined) headers["Chargewire-Retain-Result"] = String(s.retainResult);
     if (s.statementTimeoutMs !== undefined && s.statementTimeoutMs > 0) {
-      headers["Warp-Statement-Timeout"] = String(Math.max(1, Math.round(s.statementTimeoutMs)));
+      headers["Chargewire-Statement-Timeout"] = String(Math.max(1, Math.round(s.statementTimeoutMs)));
     }
-    if (s.queryTag !== undefined) headers["Warp-Query-Tag"] = s.queryTag;
-    if (s.ipcCodec !== undefined) headers["Warp-IPC-Compression"] = s.ipcCodec;
+    if (s.queryTag !== undefined) headers["Chargewire-Query-Tag"] = s.queryTag;
+    if (s.ipcCodec !== undefined) headers["Chargewire-IPC-Compression"] = s.ipcCodec;
     if (s.resultPartitions > 1 && this.core.has(Capability.resultPartitions)) {
-      headers["Warp-Result-Partitions"] = String(s.resultPartitions);
-      if (s.resultOrder === "any") headers["Warp-Result-Order"] = "any";
+      headers["Chargewire-Result-Partitions"] = String(s.resultPartitions);
+      if (s.resultOrder === "any") headers["Chargewire-Result-Order"] = "any";
     }
     // This client reads partitions from their locations; it says so only to a server that offers it.
-    if (this.remoteLocations) headers["Warp-Result-Locations"] = "remote";
+    if (this.remoteLocations) headers["Chargewire-Result-Locations"] = "remote";
     return {
       method: "POST",
       path: this.#path(sessionId),
@@ -186,7 +186,7 @@ export class Execution {
       );
     } catch (err) {
       // A statement that already failed or was cancelled may answer with its error (§6.1).
-      if (err instanceof WarpSqlError && err.statementId !== undefined) return err.statementId;
+      if (err instanceof ChargewireError && err.statementId !== undefined) return err.statementId;
       throw err;
     }
     return typeof doc.statement_id === "string" ? doc.statement_id : undefined;
@@ -234,7 +234,7 @@ export class Execution {
     if (rr.partition !== 0) query["partition"] = String(rr.partition);
     if (rr.fromBatch !== 0) query["from_batch"] = String(rr.fromBatch);
     const headers: Record<string, string> = { Accept: mediaTypeArrow };
-    if (this.settings.ipcCodec !== undefined) headers["Warp-IPC-Compression"] = this.settings.ipcCodec;
+    if (this.settings.ipcCodec !== undefined) headers["Chargewire-IPC-Compression"] = this.settings.ipcCodec;
     return this.core.session.doHandle(this.sessionId!, "result", {
       method: "GET",
       path: `${this.#statementPath()}/result`,
@@ -262,7 +262,7 @@ export class Execution {
     if (!this.#controller.signal.aborted) {
       this.#controller.abort(
         reason ??
-          new WarpSqlError({
+          new ChargewireError({
             code: ErrorCode.statementCancelled,
             message: "the statement was cancelled",
             cancelReason: "client",
@@ -290,7 +290,7 @@ export class Execution {
     try {
       await http.void({ method: "POST", path: `${this.#statementPath()}/cancel`, idempotent: true, signal });
     } catch (err) {
-      if (!WarpSqlError.is(err, ErrorCode.statementNotFound)) throw err;
+      if (!ChargewireError.is(err, ErrorCode.statementNotFound)) throw err;
     }
   }
 
@@ -311,7 +311,7 @@ export class Execution {
       try {
         await http.void({ method: "DELETE", path, idempotent: true, signal: AbortSignal.timeout(10_000) });
       } catch (err) {
-        if (!WarpSqlError.is(err, ErrorCode.statementNotFound, ErrorCode.sessionNotFound)) throw err;
+        if (!ChargewireError.is(err, ErrorCode.statementNotFound, ErrorCode.sessionNotFound)) throw err;
       }
     });
   }
@@ -329,7 +329,7 @@ export class Execution {
   fail(err: unknown): unknown {
     // A statement that failed or was cancelled by the time its submit was answered names
     // itself on the error response (§6.1), so it can still be freed.
-    if (this.statementId === undefined && err instanceof WarpSqlError && err.statementId !== undefined) {
+    if (this.statementId === undefined && err instanceof ChargewireError && err.statementId !== undefined) {
       this.statementId = err.statementId;
     }
     const reported = this.cancelled || this.signal.aborted ? this.cancelledError() : err;
@@ -340,9 +340,10 @@ export class Execution {
 
 /** Whether an error means the server does not have the endpoint called (an answer without a problem document by its status). */
 export function unsupported(err: unknown): boolean {
-  if (WarpSqlError.is(err, ErrorCode.notFound, ErrorCode.methodNotAllowed, ErrorCode.notImplemented)) return true;
+  if (ChargewireError.is(err, ErrorCode.notFound, ErrorCode.methodNotAllowed, ErrorCode.notImplemented)) return true;
   return (
-    WarpSqlError.is(err, ErrorCode.clientHttpError) && (err.status === 404 || err.status === 405 || err.status === 501)
+    ChargewireError.is(err, ErrorCode.clientHttpError) &&
+    (err.status === 404 || err.status === 405 || err.status === 501)
   );
 }
 
@@ -382,7 +383,7 @@ export async function runRows(exec: Execution): Promise<Rows> {
       exec.statementId = doc.statement_id;
       return await fromDocument(exec, await exec.waitDone(doc));
     }
-    exec.statementId = resp.headers.get("warp-statement-id") ?? undefined;
+    exec.statementId = resp.headers.get("chargewire-statement-id") ?? undefined;
     const split = await splitHeaders(resp);
     if (split !== undefined) {
       // A split result (§6.10): this body is partition 0; the others are read at once.
@@ -411,25 +412,25 @@ export async function runRows(exec: Execution): Promise<Rows> {
 
 /**
  * Reads how a streamed result was split (§6.10). With more than one partition the answer
- * carries both `Warp-Result-Partitions` and `Warp-Result-Order`; a missing or unknown order
+ * carries both `Chargewire-Result-Partitions` and `Chargewire-Result-Order`; a missing or unknown order
  * is never guessed, it is a protocol error.
  */
 async function splitHeaders(resp: Response): Promise<{ k: number; order: "interleaved" | "any" } | undefined> {
-  const header = resp.headers.get("warp-result-partitions");
+  const header = resp.headers.get("chargewire-result-partitions");
   if (header === null) return undefined;
   const k = /^\d+$/.test(header.trim()) ? Number(header.trim()) : Number.NaN;
   if (k === 1) return undefined;
   if (!Number.isInteger(k) || k < 1 || k > maxResultPartitions) {
     await discard(resp);
-    throw protocolError(`the result came back with an invalid Warp-Result-Partitions ${JSON.stringify(header)}`);
+    throw protocolError(`the result came back with an invalid Chargewire-Result-Partitions ${JSON.stringify(header)}`);
   }
-  const order = resp.headers.get("warp-result-order");
+  const order = resp.headers.get("chargewire-result-order");
   if (order !== "interleaved" && order !== "any") {
     await discard(resp);
     throw protocolError(
       order === null
-        ? `the result came back in ${k} partitions without Warp-Result-Order`
-        : `the result came back in ${k} partitions with an unknown Warp-Result-Order ${JSON.stringify(order)}`,
+        ? `the result came back in ${k} partitions without Chargewire-Result-Order`
+        : `the result came back in ${k} partitions with an unknown Chargewire-Result-Order ${JSON.stringify(order)}`,
     );
   }
   return { k, order };

@@ -1,6 +1,6 @@
 // Licensed under the Apache License, Version 2.0.
 //
-// Starts the shared server once. Without WARP_SQL_JS_TEST_SERVER_BINARY the run fails:
+// Starts the shared server once. Without CHARGEWIRE_JS_TEST_SERVER_BINARY the run fails:
 // these tests never skip. A run in which no test reached a server fails too.
 
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -19,7 +19,7 @@ declare module "vitest" {
 }
 
 export default async function setup(project: TestProject): Promise<() => Promise<void>> {
-  const dir = mkdtempSync(join(tmpdir(), "warp-sql-js-live-"));
+  const dir = mkdtempSync(join(tmpdir(), "chargewire-js-live-"));
   const counterFile = join(dir, "reached");
   writeFileSync(counterFile, "");
   const server = await launchServer();

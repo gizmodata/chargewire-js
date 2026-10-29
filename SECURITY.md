@@ -15,7 +15,7 @@ before any public disclosure.
 
 ## Supported versions
 
-Security fixes go into the latest minor release of Warp SQL JavaScript client. Older releases don't receive fixes;
+Security fixes go into the latest minor release of Chargewire JavaScript client. Older releases don't receive fixes;
 upgrade to the latest release.
 
 ## Scope
