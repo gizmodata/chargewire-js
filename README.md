@@ -39,8 +39,11 @@ the reference server `chargewire-duckdb`.
 - ✅ **Never a short table:** a result stream that ends without Arrow's end-of-stream marker
   throws; it is never taken for a complete result.
 
-> **Status: 1.0.0, for Chargewire protocol 1.0.0.** Tested against `chargewire-duckdb` (chargewire main) and
-> Hardcharger 2.0.0.
+> **Status: stable**, for Chargewire protocol 1.0, on [npm](https://www.npmjs.com/package/@gizmodata/chargewire).
+> The [latest release](https://github.com/gizmodata/chargewire-js/releases/latest) and
+> [CHANGELOG.md](CHANGELOG.md) say what each version brings. It works with servers on either side of the
+> protocol's rename, and is tested against `chargewire-duckdb` (chargewire main) and
+> [Hardcharger](https://github.com/gizmodata/hardcharger).
 
 ## 📥 Install
 
