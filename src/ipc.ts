@@ -1,6 +1,7 @@
 // Licensed under the Apache License, Version 2.0.
 
 import {
+  type Data,
   RecordBatch,
   RecordBatchReader,
   RecordBatchStreamWriter,
@@ -390,5 +391,19 @@ export function concat(chunks: readonly Uint8Array[], size?: number): Uint8Array
 
 /** About how many bytes a batch holds, for buffering limits. */
 export function batchBytes(batch: RecordBatch): number {
-  return batch.data.byteLength;
+  return dataBytes(batch.data);
+}
+
+// Arrow's own Data.byteLength adds up its children's, and the one empty batch that
+// apache-arrow makes for a stream with a schema and no record batches has `undefined` where
+// a LIST column's child would be (a query that returns no rows, gizmodata/hardcharger#23).
+function dataBytes(data: Data): number {
+  let bytes = bufferBytes(data.valueOffsets) + bufferBytes(data.values) + bufferBytes(data.nullBitmap);
+  bytes += bufferBytes(data.typeIds);
+  for (const child of data.children ?? []) if (child) bytes += dataBytes(child);
+  return bytes;
+}
+
+function bufferBytes(buffer: unknown): number {
+  return ArrayBuffer.isView(buffer) ? buffer.byteLength : 0;
 }

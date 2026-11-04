@@ -6,6 +6,30 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-11-04
+
+### Changed
+
+- A session the server ended because its transaction sat idle past the server's
+  idle-in-transaction timeout (`session_ended`, reason `idle_in_transaction`, Chargewire 2.1.0;
+  Hardcharger 2.7.0's `idle_in_transaction_session_timeout`) is replaced by a new session, the way
+  a session the server no longer knows is, without renewing the token. The statement that found
+  it ended fails with that error and is never run again on the new session, whether the
+  transaction was begun with autocommit off or with `BEGIN` in SQL: run in autocommit it would
+  commit on its own while the transaction's earlier statements had been rolled back. The next
+  statement runs on the new session.
+
+### Fixed
+
+- A result with no rows and a LIST column (a query whose filter matched nothing, say) failed in
+  the reader with "Cannot read properties of undefined (reading 'byteLength')": apache-arrow
+  makes one empty batch of a stream that has a schema and no record batches, and that batch's
+  LIST columns have no child data, which the buffering limit's byte count walked into. The
+  count now skips what isn't there and reads such a batch as 0 bytes
+  ([gizmodata/hardcharger#23](https://github.com/gizmodata/hardcharger/issues/23)). So does the
+  empty batch of an ingest of an empty table, or of a prepared statement with no parameter rows,
+  whose data has no children at all.
+
 ## [2.0.1] - 2026-10-29
 
 ### Fixed

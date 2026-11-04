@@ -120,6 +120,45 @@ describe("sessions (§5.6)", () => {
     expect(conn.sessionReplacements).toBe(1);
   });
 
+  test("session_ended for a transaction idle too long: the statement fails, the session is replaced with the same token", async () => {
+    // The transaction was begun in SQL (BEGIN), which the client doesn't track, so only the
+    // reason says a transaction was lost: the statement must fail, never run again on the new
+    // session in autocommit (its transaction's earlier statements were rolled back).
+    const server = new FakeServer();
+    server.on("POST", /\/sessions\/s1\/statements$/, () =>
+      problem(401, "session_ended", { reason: "idle_in_transaction" }),
+    );
+    let ranOnReplacement = 0;
+    server.on("POST", /\/sessions\/s2\/statements$/, () => {
+      ranOnReplacement++;
+      return json(200, doneDoc("q2", { kind: "update", rows_affected: 1 }));
+    });
+    const conn = await open(server);
+    const err = await expectCode(conn.execute("INSERT INTO t VALUES (1)"), ErrorCode.sessionEnded);
+    expect(err.reason).toBe("idle_in_transaction");
+    expect(err.lostSessionId).toBe("s1");
+    expect(err.replacementSessionId).toBe("s2");
+    expect(err.message).toContain("open transaction");
+    expect(ranOnReplacement).toBe(0);
+    expect(server.tokens).toBe(1);
+    expect(server.sessions).toBe(2);
+    expect(conn.sessionId).toBe("s2");
+    expect(conn.sessionReplacements).toBe(1);
+    // The connection is usable again: the next statement runs on the replacement.
+    expect(await conn.execute("INSERT INTO t VALUES (2)")).toBe(1);
+    expect(ranOnReplacement).toBe(1);
+    // Without reconnect, nothing is replaced: the error says the session is gone.
+    const strict = new FakeServer();
+    strict.on("POST", /\/sessions\/s1\/statements$/, () =>
+      problem(401, "session_ended", { reason: "idle_in_transaction" }),
+    );
+    const noReconnect = await open(strict, { reconnect: false });
+    const err2 = await expectCode(noReconnect.execute("INSERT INTO t VALUES (1)"), ErrorCode.sessionEnded);
+    expect(err2.reason).toBe("idle_in_transaction");
+    expect(err2.lostSessionId).toBe("s1");
+    expect(strict.sessions).toBe(1);
+  });
+
   test("GET of a killed session is session_ended with its reason: no token renewal, no replacement", async () => {
     const server = new FakeServer();
     server.on("GET", /^\/chargewire\/v1\/sessions\/s1$/, () => problem(401, "session_ended", { reason: "killed" }));
