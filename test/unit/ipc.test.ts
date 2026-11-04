@@ -1,10 +1,16 @@
 import {
+  Field,
+  Int32,
+  List,
   type RecordBatch,
   RecordBatchStreamWriter,
+  Struct,
   Table,
+  Utf8,
   tableFromArrays,
   tableFromIPC,
   tableToIPC,
+  vectorFromArray,
 } from "apache-arrow";
 import { describe, expect, test, vi } from "vitest";
 
@@ -13,6 +19,7 @@ import {
   IpcScanner,
   ScannedBody,
   arrowBody,
+  batchBytes,
   concat,
   decodeSchema,
   encodeStream,
@@ -202,5 +209,45 @@ describe("schemas in JSON (§2.2)", () => {
     expect(decodeSchema(base64)!.fields.map((f) => f.name)).toEqual(["a", "s"]);
     expect(decodeSchema(null)).toBeUndefined();
     expect(() => decodeSchema("not base64!")).toThrow(expect.objectContaining({ code: ErrorCode.clientProtocolError }));
+  });
+});
+
+describe("batchBytes", () => {
+  // A statement that returns no rows arrives as a stream with its schema and no record
+  // batches; apache-arrow makes one empty batch of it, whose LIST columns have no child
+  // Data (gizmodata/hardcharger#23).
+  function emptyStreamOf(sql: Table): Uint8Array {
+    const writer = new RecordBatchStreamWriter();
+    writer.reset(undefined, sql.schema);
+    writer.finish();
+    return writer.toUint8Array(true);
+  }
+
+  const listOfText = new List(new Field("item", new Utf8()));
+  const listTable = () => new Table({ v: vectorFromArray([["a"], ["b", "c"]], listOfText) });
+
+  test("an empty batch of a LIST column reads as 0 bytes instead of throwing", () => {
+    const list = listTable();
+    const empty = tableFromIPC(emptyStreamOf(list));
+    expect(empty.numRows).toBe(0);
+    expect(empty.batches).toHaveLength(1);
+    expect(() => empty.batches[0]!.data.byteLength).toThrow(); // arrow's own, the bug's cause
+    expect(batchBytes(empty.batches[0]!)).toBe(0);
+  });
+
+  test("an empty batch of a LIST of STRUCTs reads as 0 bytes too", () => {
+    const problem = new Struct([new Field("seq", new Int32()), new Field("at", new Utf8())]);
+    const nested = new Table({
+      problems: vectorFromArray([[{ seq: 1, at: "x" }], [{ seq: 2, at: "y" }]], new List(new Field("item", problem))),
+    });
+    const empty = tableFromIPC(emptyStreamOf(nested));
+    expect(empty.numRows).toBe(0);
+    expect(batchBytes(empty.batches[0]!)).toBe(0);
+  });
+
+  test("a batch with rows counts its buffers and its children's", () => {
+    const batch = listTable().batches[0]!;
+    expect(batchBytes(batch)).toBe(batch.data.byteLength);
+    expect(batchBytes(batch)).toBeGreaterThan(0);
   });
 });

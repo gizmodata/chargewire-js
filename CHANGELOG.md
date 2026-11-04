@@ -6,6 +6,15 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Fixed
+
+- A result with no rows and a LIST column (a query whose filter matched nothing, say) failed in
+  the reader with "Cannot read properties of undefined (reading 'byteLength')": apache-arrow
+  makes one empty batch of a stream that has a schema and no record batches, and that batch's
+  LIST columns have no child data, which the buffering limit's byte count walked into. The
+  count now skips what isn't there and reads such a batch as 0 bytes
+  ([gizmodata/hardcharger#23](https://github.com/gizmodata/hardcharger/issues/23)).
+
 ## [2.0.1] - 2026-10-29
 
 ### Fixed
