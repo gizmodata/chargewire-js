@@ -41,6 +41,11 @@ export function isSessionLost(err: unknown, canRenew: boolean): err is Chargewir
   );
 }
 
+/** Whether `err` says the server ended the session with a transaction open in it (§5.6). */
+export function lostTransaction(err: ChargewireError): boolean {
+  return err.code === ErrorCode.sessionEnded && err.reason === "idle_in_transaction";
+}
+
 const replacedNote = (oldId: string, newId: string): string =>
   ` (note: the server lost session ${oldId} and this ran in replacement session ${newId}, which has the ` +
   `connection's options but not the old session's temporary tables, SQL-level settings or prepared statements)`;
@@ -181,7 +186,12 @@ export class Session {
         });
       }
       if (scope === "handle") throw sessionLostError(err, id, newId, lostWhat);
-      if (scope === "statement" && this.inTransaction) throw sessionLostError(err, id, newId, "open transaction");
+      // A session ended for an idle transaction had one open, whether the client turned
+      // autocommit off or the SQL ran BEGIN (which the client can't see): never run a
+      // statement of it again on the replacement, in autocommit.
+      if (scope === "statement" && (this.inTransaction || lostTransaction(err))) {
+        throw sessionLostError(err, id, newId, "open transaction");
+      }
       if (req.body?.stream !== undefined) {
         throw sessionLostError(err, id, newId, "upload (it streamed, so it cannot be sent again)");
       }

@@ -28,7 +28,7 @@ import {
   type SessionDocument,
   type TransactionState,
 } from "./protocol.js";
-import { Session, sessionPath } from "./session.js";
+import { Session, lostTransaction, sessionPath } from "./session.js";
 import { Execution, type PreparedRef, maxResultPartitions, runRows, runUpdate } from "./statement.js";
 import { ResultStream } from "./stream.js";
 import { type SchemeMap, defaultSchemes, parseUrl } from "./url.js";
@@ -894,6 +894,7 @@ export class PreparedStatement {
         ChargewireError.is(err, ErrorCode.preparedNotFound) ||
         (ChargewireError.is(err) && err.replacementSessionId !== undefined);
       if (!gone || body.stream !== undefined || this.#core.session.inTransaction || signal?.aborted) throw err;
+      if (ChargewireError.is(err) && lostTransaction(err)) throw err;
       await this.#reprepare(signal);
       return run(new Execution(this.#core, settings, body, this.#ref, signal));
     }
