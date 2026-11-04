@@ -400,7 +400,7 @@ export function batchBytes(batch: RecordBatch): number {
 function dataBytes(data: Data): number {
   let bytes = bufferBytes(data.valueOffsets) + bufferBytes(data.values) + bufferBytes(data.nullBitmap);
   bytes += bufferBytes(data.typeIds);
-  for (const child of data.children) if (child) bytes += dataBytes(child);
+  for (const child of data.children ?? []) if (child) bytes += dataBytes(child);
   return bytes;
 }
 

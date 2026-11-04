@@ -122,8 +122,12 @@ describe("sessions (§5.6)", () => {
 
   test("session_ended for a transaction idle too long: a replacement session, the same token", async () => {
     const server = new FakeServer();
-    server.on("POST", /\/sessions\/s1\/statements$/, () => problem(401, "session_ended", { reason: "idle_in_transaction" }));
-    server.on("POST", /\/sessions\/s2\/statements$/, () => json(200, doneDoc("q2", { kind: "update", rows_affected: 1 })));
+    server.on("POST", /\/sessions\/s1\/statements$/, () =>
+      problem(401, "session_ended", { reason: "idle_in_transaction" }),
+    );
+    server.on("POST", /\/sessions\/s2\/statements$/, () =>
+      json(200, doneDoc("q2", { kind: "update", rows_affected: 1 })),
+    );
     const conn = await open(server);
     expect(await conn.execute("INSERT INTO t VALUES (1)")).toBe(1);
     expect(server.tokens).toBe(1);
@@ -132,7 +136,9 @@ describe("sessions (§5.6)", () => {
     expect(conn.sessionReplacements).toBe(1);
     // Inside a transaction the client itself opened, nothing is replaced: the work is gone.
     const strict = new FakeServer();
-    strict.on("POST", /\/sessions\/s1\/statements$/, () => problem(401, "session_ended", { reason: "idle_in_transaction" }));
+    strict.on("POST", /\/sessions\/s1\/statements$/, () =>
+      problem(401, "session_ended", { reason: "idle_in_transaction" }),
+    );
     const noReconnect = await open(strict, { reconnect: false });
     const err = await expectCode(noReconnect.execute("INSERT INTO t VALUES (1)"), ErrorCode.sessionEnded);
     expect(err.reason).toBe("idle_in_transaction");
