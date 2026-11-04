@@ -24,17 +24,20 @@ export function sessionPath(id: string): string {
 
 /**
  * Whether `err` says the session is gone in a way a new session cures (§5.6): the server
- * doesn't have it (`session_not_found`), or ended it because its token expired and the
- * client can get a new token (`canRenew`), which it must before opening a new session.
- * After `credentials_changed`, `principal_dropped` or `token_revoked` the client may not sign
- * in again on its own (§4.2), and an administrator's `killed` (or a reason the client
- * doesn't know) is reported, not papered over: those are the error.
+ * doesn't have it (`session_not_found`), ended it because its transaction sat idle past the
+ * server's limit (`idle_in_transaction`: the transaction was rolled back, a new session is
+ * as good as the old one was), or ended it because its token expired and the client can get
+ * a new token (`canRenew`), which it must before opening a new session. After
+ * `credentials_changed`, `principal_dropped` or `token_revoked` the client may not sign in
+ * again on its own (§4.2), and an administrator's `killed` (or a reason the client doesn't
+ * know) is reported, not papered over: those are the error.
  */
 export function isSessionLost(err: unknown, canRenew: boolean): err is ChargewireError {
   return (
     err instanceof ChargewireError &&
     (err.code === ErrorCode.sessionNotFound ||
-      (err.code === ErrorCode.sessionEnded && err.reason === "token_expired" && canRenew))
+      (err.code === ErrorCode.sessionEnded &&
+        (err.reason === "idle_in_transaction" || (err.reason === "token_expired" && canRenew))))
   );
 }
 
@@ -127,9 +130,14 @@ export class Session {
     if (this.#id !== failedId) return this.#id;
     if (this.#replacing?.failedId === failedId) return this.#replacing.promise;
     const promise = (async () => {
-      if (cause.code === ErrorCode.sessionEnded && this.#http.currentToken === tokenUsed) {
+      if (
+        cause.code === ErrorCode.sessionEnded &&
+        cause.reason !== "idle_in_transaction" &&
+        this.#http.currentToken === tokenUsed
+      ) {
         // §5.6: get a new access token before creating a new session (unless the request that
-        // found the session gone already did, after its own invalid_token).
+        // found the session gone already did, after its own invalid_token). A session ended
+        // for its idle transaction says nothing about the token, which stays.
         await this.#http.renewToken(tokenUsed);
       }
       const doc = await create(this.#http, this.#options);
