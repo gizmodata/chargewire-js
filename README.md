@@ -172,17 +172,18 @@ client for any Chargewire server. Another wrapper can add a scheme of its own by
 
 Other `connect` options:
 
-| Option                                                                                                         | Default        | Meaning                                                                                             |
-| -------------------------------------------------------------------------------------------------------------- | -------------- | --------------------------------------------------------------------------------------------------- |
-| `catalog`, `schema`, `sessionOptions`                                                                          |                | The session's options (§5.3), replayed on a replacement session                                     |
-| `tls`                                                                                                          | system         | Node, Deno, Bun: `{ ca, cert, key, servername, skipVerify }` (PEM text)                             |
-| `fetch`                                                                                                        | global         | Your own `fetch` (not together with `tls`)                                                          |
-| `fetchCredentials`                                                                                             | runtime's      | fetch's credentials mode; `"include"` by default in a browser with `authType: "client_certificate"` |
-| `maxAttempts`                                                                                                  | `4`            | Sends of a request that is safe to repeat, first included                                           |
-| `reconnect`                                                                                                    | `true`         | Replace a session the server lost                                                                   |
-| `resultBufferBytes`                                                                                            | 128 MiB        | How much of an unread stream may be read ahead when the session is needed for something else        |
-| `logger`                                                                                                       | `console.warn` | `{ debug, warn }`; session replacements are warnings                                                |
-| `async`, `retainResult`, `statementTimeoutMs`, `queryTag`, `ipcCompression`, `resultPartitions`, `resultOrder` |                | Defaults for every statement (below)                                                                |
+| Option                                                                                                         | Default        | Meaning                                                                                                     |
+| -------------------------------------------------------------------------------------------------------------- | -------------- | ----------------------------------------------------------------------------------------------------------- |
+| `catalog`, `schema`, `sessionOptions`                                                                          |                | The session's options (§5.3), replayed on a replacement session                                             |
+| `tls`                                                                                                          | system         | Node, Deno, Bun: `{ ca, cert, key, servername, skipVerify }` (PEM text)                                     |
+| `fetch`                                                                                                        | global         | Your own `fetch` (not together with `tls`)                                                                  |
+| `fetchCredentials`                                                                                             | runtime's      | fetch's credentials mode; `"include"` by default in a browser with `authType: "client_certificate"`         |
+| `maxAttempts`                                                                                                  | `4`            | Sends of a request that is safe to repeat, first included                                                   |
+| `resumeTimeout`                                                                                                | `600`          | Seconds to keep repeating a request while the server answers `server_resuming`; `0`: no retries (see below) |
+| `reconnect`                                                                                                    | `true`         | Replace a session the server lost                                                                           |
+| `resultBufferBytes`                                                                                            | 128 MiB        | How much of an unread stream may be read ahead when the session is needed for something else                |
+| `logger`                                                                                                       | `console.warn` | `{ debug, warn }`; session replacements are warnings                                                        |
+| `async`, `retainResult`, `statementTimeoutMs`, `queryTag`, `ipcCompression`, `resultPartitions`, `resultOrder` |                | Defaults for every statement (below)                                                                        |
 
 ## 🔐 Client certificate sign-in
 
@@ -361,6 +362,17 @@ Statement options, per call or as `connect` defaults:
   are retried after transport errors and 421/429/502/503/504, honouring `Retry-After`. Commit and
   rollback are never retried. Uploads up to 16 MiB are held in memory so they can be retried;
   larger ones stream (Node, Deno, Bun) and are sent once.
+- **A server that is resuming.** A server that was stopped and is starting again (a GizmoData Cloud
+  cluster with auto-resume, for one) answers `server_resuming` (503, with `Retry-After`) to any
+  request but discovery, and may hold the login for up to 25 s before answering. The client waits
+  the `Retry-After` (3 s when it is missing, at least 1 s, never more than 60 s) and sends the same
+  request again, the login and commits included (the server did not take it), until the server
+  answers something else or `resumeTimeout` seconds (600 by default) have passed since the first
+  `server_resuming`; then the error is that `server_resuming`, with the server's message. These
+  repeats do not count against `maxAttempts`, and `resumeTimeout: 0` turns them off. `connect`'s
+  `signal` (or a call's) stops the wait. The client sets no per-request timeout of its own, so a held
+  login is never cut short (Node's fetch waits 300 s for an answer's headers). A streamed upload
+  over 16 MiB is sent once. Other 503 answers, such as `server_draining`, keep the retries above.
 - **Tokens** are renewed before they expire and, once, when the server refuses one with
   `invalid_token` without a reason, with `token_expired` or with a reason the client doesn't know.
   After `token_revoked`, `credentials_changed` or `principal_dropped` (§4.2) the client does not sign

@@ -102,6 +102,50 @@ export interface HttpClientConfig {
   fetchCredentials?: RequestCredentials | undefined;
   /** The server is known to be from before the protocol's rename (see `legacy`). */
   legacy?: boolean;
+  /**
+   * How long to keep repeating a request the server answers with `server_resuming`, from the
+   * first such answer, in milliseconds; 0 reports the first one. Default 600 s.
+   */
+  resumeTimeoutMs?: number;
+}
+
+/** The default `resumeTimeout`, in seconds. */
+export const defaultResumeTimeoutSeconds = 600;
+
+/** The wait before repeating a `server_resuming` answer that has no Retry-After. */
+export const defaultResumeRetryAfterMs = 3000;
+
+/** The longest wait before repeating a `server_resuming` answer, whatever its Retry-After says. */
+export const maxResumeRetryAfterMs = 60_000;
+
+/** The shortest wait: `Retry-After: 0` must not turn the retries into a busy loop. */
+export const minResumeRetryAfterMs = 1000;
+
+/**
+ * How long to wait before repeating a request the server answered with `server_resuming`:
+ * its Retry-After, 3 s without one, at least 1 s and at most 60 s.
+ */
+export function resumeRetryAfterMs(retryAfterMs: number | undefined): number {
+  if (retryAfterMs === undefined || !Number.isFinite(retryAfterMs) || retryAfterMs < 0) {
+    return defaultResumeRetryAfterMs;
+  }
+  return Math.min(Math.max(retryAfterMs, minResumeRetryAfterMs), maxResumeRetryAfterMs);
+}
+
+/** The clock and the pause of the `server_resuming` retries. */
+export interface ResumeClock {
+  now(): number;
+  sleep(ms: number, signal?: AbortSignal): Promise<void>;
+}
+
+const systemClock: ResumeClock = { now: () => performance.now(), sleep: (ms, signal) => sleep(ms, signal) };
+let resumeClock: ResumeClock = systemClock;
+
+/** Replaces the clock of the `server_resuming` retries, for tests; returns the one in use until now. */
+export function setResumeClockForTesting(clock: ResumeClock | undefined): ResumeClock {
+  const previous = resumeClock;
+  resumeClock = clock ?? systemClock;
+  return previous;
 }
 
 /** How long before its expiry a token is replaced, at most. */
@@ -119,6 +163,7 @@ export class HttpClient {
   readonly #maxAttempts: number;
   readonly #userAgent: string | undefined;
   readonly #fetchCredentials: RequestCredentials | undefined;
+  readonly #resumeTimeoutMs: number;
   #token: string | undefined;
   #renewAt: number | undefined; // when to replace the token; undefined when its lifetime is unknown
   #renewing: Promise<void> | undefined;
@@ -140,6 +185,7 @@ export class HttpClient {
     this.#maxAttempts = Math.max(1, config.maxAttempts);
     this.#userAgent = config.userAgent;
     this.#fetchCredentials = config.fetchCredentials;
+    this.#resumeTimeoutMs = config.resumeTimeoutMs ?? defaultResumeTimeoutSeconds * 1000;
     if (config.credentials.kind === "static") this.#token = config.credentials.token;
   }
 
@@ -206,7 +252,10 @@ export class HttpClient {
    * Sends a request and returns its 2xx answer. An error answer becomes a ChargewireError.
    *
    * Transport failures and 421/429/502/503/504 answers to idempotent requests are sent
-   * again (honouring Retry-After), with backoff. A request refused with `invalid_token` is
+   * again (honouring Retry-After), with backoff. A `server_resuming` answer (503: the server
+   * is starting again after a stop) is not one of those: any request, the login included, is
+   * sent again as it was after its Retry-After (3 s when absent, 1 s to 60 s) until another
+   * answer comes or `resumeTimeoutMs` has passed since the first `server_resuming`. A request refused with `invalid_token` is
    * sent once more with a fresh token (the server refused it before running it), unless
    * the refusal's reason says signing in again cannot help or must not happen on its own
    * (`token_revoked`, `credentials_changed`, `principal_dropped`, §4.2): that refusal is
@@ -257,6 +306,7 @@ export class HttpClient {
       return wait;
     };
     let renewed = false;
+    let resumeDeadline: number | undefined; // set by the first server_resuming answer
     for (let attempt = 1; ; attempt++) {
       const token = req.anonymous ? undefined : await this.accessToken();
       const canRepeat = replayable(req.body) && attempt < this.#maxAttempts;
@@ -274,6 +324,27 @@ export class HttpClient {
       }
       if (resp.status >= 200 && resp.status < 300) return resp;
       const problem = await responseError(resp);
+      if (resp.status === 503 && problem.code === ErrorCode.serverResuming) {
+        // The server did not take the request, so any request may be sent again, but only by
+        // this loop: not by the retries below, which give up after a few attempts.
+        if (this.#resumeTimeoutMs <= 0 || !replayable(req.body)) throw problem;
+        const clock = resumeClock;
+        const now = clock.now();
+        resumeDeadline ??= now + this.#resumeTimeoutMs;
+        const remaining = resumeDeadline - now;
+        if (remaining <= 0) {
+          throw problem.with({
+            message:
+              `${problem.message}; still resuming after ${Math.round(this.#resumeTimeoutMs / 1000)} s of ` +
+              `retries (resumeTimeout sets how long the client waits)`,
+          });
+        }
+        const wait = Math.min(resumeRetryAfterMs(problem.retryAfterMs), remaining);
+        this.logger.debug?.("server resuming; retrying", { path: req.path, wait });
+        await clock.sleep(wait, req.signal);
+        attempt--;
+        continue;
+      }
       if (
         problem.code === ErrorCode.invalidToken &&
         tokenRenewable(problem.reason) &&
@@ -339,9 +410,12 @@ export class HttpClient {
     await discard(resp);
   }
 
-  /** Obtains a token now, so wrong credentials fail at connect time. */
-  async authenticate(): Promise<void> {
-    if (this.canRenew) await this.renewToken(undefined);
+  /**
+   * Obtains a token now, so wrong credentials fail at connect time. `signal` stops the login,
+   * including its waits for a resuming server.
+   */
+  async authenticate(signal?: AbortSignal): Promise<void> {
+    if (this.canRenew) await this.renewToken(undefined, signal);
   }
 
   /** A token to send, renewed first when it is about to expire. */
@@ -357,17 +431,17 @@ export class HttpClient {
   }
 
   /** Replaces `stale` with a new token, unless another caller already did. */
-  async renewToken(stale: string | undefined): Promise<void> {
+  async renewToken(stale: string | undefined, signal?: AbortSignal): Promise<void> {
     if (this.#token !== stale && this.#fresh()) return;
     if (this.#renewing === undefined) {
-      this.#renewing = this.#obtain().finally(() => {
+      this.#renewing = this.#obtain(signal).finally(() => {
         this.#renewing = undefined;
       });
     }
     await this.#renewing;
   }
 
-  async #obtain(): Promise<void> {
+  async #obtain(signal?: AbortSignal): Promise<void> {
     const credentials = this.#credentials;
     if (credentials.kind === "static") return;
     if (credentials.kind === "provider") {
@@ -394,6 +468,7 @@ export class HttpClient {
       body: jsonBody(grant),
       idempotent: true,
       anonymous: true,
+      signal,
     });
     if (
       typeof answer.access_token !== "string" ||

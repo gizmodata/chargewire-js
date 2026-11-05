@@ -6,6 +6,21 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Added
+
+- A server that is starting again after a stop (`server_resuming`: 503 with `Retry-After`) no
+  longer fails the request: the client waits the `Retry-After` (3 s when absent, 1 s to 60 s) and
+  sends the same request again, the login and commits included, until the server answers
+  something else or the new `resumeTimeout` option (seconds, default `600`; `0` turns the retries
+  off) has passed since the first such answer. Then the error is the server's `server_resuming`
+  (`ErrorCode.serverResuming`), with its message. These repeats do not count against
+  `maxAttempts`; other 503 answers, `server_draining` among them, keep the usual retries.
+
+### Fixed
+
+- `connect`'s `signal` now also stops the login (it reached discovery only), which matters now
+  that a login can wait minutes for a resuming server.
+
 ## [2.1.0] - 2026-11-04
 
 ### Changed

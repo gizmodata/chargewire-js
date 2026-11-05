@@ -11,6 +11,7 @@ import {
   type Logger,
   type RequestBody,
   decodeJSON,
+  defaultResumeTimeoutSeconds,
   jsonBody,
   newIdempotencyKey,
   stringifyJSON,
@@ -126,6 +127,14 @@ export interface ConnectOptions extends StatementOptions {
   fetch?: typeof fetch;
   /** Sends of a request that is safe to repeat, first included. Default 4. */
   maxAttempts?: number;
+  /**
+   * Seconds to keep repeating a request while the server answers `server_resuming` (a stopped
+   * server starting again, such as a GizmoData Cloud cluster with auto-resume), each time
+   * after the answer's Retry-After (3 s when absent, 1 s to 60 s). Counted from the first
+   * such answer; then the error is the server's `server_resuming`. 0 reports the first one
+   * at once. Default 600.
+   */
+  resumeTimeout?: number;
   /** Replace a session the server lost (§5.6). Default true. */
   reconnect?: boolean;
   /**
@@ -209,11 +218,16 @@ export async function connect(options: ConnectOptions): Promise<Connection> {
       ? options.logger.warn?.bind(options.logger)
       : (message, fields) => console.warn(`[chargewire] ${message}`, fields ?? ""),
   };
+  const resumeTimeout = options.resumeTimeout ?? defaultResumeTimeoutSeconds;
+  if (typeof resumeTimeout !== "number" || !Number.isFinite(resumeTimeout) || resumeTimeout < 0) {
+    throw invalidArgument("resumeTimeout must be a non-negative number of seconds");
+  }
   const http = new HttpClient({
     base,
     fetch: fetchFn,
     credentials,
     maxAttempts: options.maxAttempts ?? 4,
+    resumeTimeoutMs: resumeTimeout * 1000,
     userAgent: options.userAgent ?? (platform.name === "node" ? `chargewire-js/${version}` : undefined),
     logger,
     fetchCredentials:
@@ -259,7 +273,7 @@ export async function connect(options: ConnectOptions): Promise<Connection> {
       message: `the server does not accept the ${grant} grant (it offers ${grants.join(", ") || "none"})`,
     });
   }
-  await http.authenticate();
+  await http.authenticate(options.signal);
 
   const sessionOptions: Record<string, unknown> = { ...options.sessionOptions };
   if (options.catalog !== undefined) sessionOptions["catalog"] = options.catalog;

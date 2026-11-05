@@ -75,6 +75,11 @@ export const ErrorCode = {
   internalError: "internal_error",
   notImplemented: "not_implemented",
   serverDraining: "server_draining",
+  /**
+   * 503 with Retry-After: the server is starting again after a stop. The client repeats the
+   * request until `resumeTimeout` passes, so this reaches the application only after that.
+   */
+  serverResuming: "server_resuming",
 
   // The client's own (§11): no server answer carries these.
   /** An argument or option the client refuses before sending anything. */
