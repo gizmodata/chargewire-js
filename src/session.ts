@@ -9,10 +9,11 @@ import { type OptionsResult, type SessionDocument, transactionState } from "./pr
  * never recreates a session, so the client decides.
  *
  * - `session`: acts on the session as a whole (options, metadata, preparing); runs
- *   again on a replacement session.
- * - `statement`: runs SQL; runs again on a replacement only outside a transaction
- *   (inside one, the work before it is gone, and running the rest would commit half a
- *   transaction).
+ *   again on a replacement session, under the same condition: otherwise it would hide the
+ *   loss of a transaction, and the next statement would run alone, in autocommit.
+ * - `statement`: runs SQL; runs again on a replacement only when the client knows no
+ *   transaction was open in the lost session (inside one, the work before it is gone, and
+ *   running the rest would commit half a transaction; spec §5.7).
  * - `handle`: names something that lived in the lost session (a statement, a prepared
  *   statement, the open transaction); fails.
  */
@@ -24,9 +25,9 @@ export function sessionPath(id: string): string {
 
 /**
  * Whether `err` says the session is gone in a way a new session cures (§5.6): the server
- * doesn't have it (`session_not_found`), ended it because its transaction sat idle past the
- * server's limit (`idle_in_transaction`: the transaction was rolled back, a new session is
- * as good as the old one was), or ended it because its token expired and the client can get
+ * doesn't have it (`session_not_found`), ended it while it held a transaction open, idle past
+ * the server's idle-in-transaction limit or evicted as idle (`idle_in_transaction`: the
+ * transaction was rolled back, a new session is as good as the old one was), or ended it because its token expired and the client can get
  * a new token (`canRenew`), which it must before opening a new session. After
  * `credentials_changed`, `principal_dropped` or `token_revoked` the client may not sign in
  * again on its own (§4.2), and an administrator's `killed` (or a reason the client doesn't
@@ -46,9 +47,23 @@ export function lostTransaction(err: ChargewireError): boolean {
   return err.code === ErrorCode.sessionEnded && err.reason === "idle_in_transaction";
 }
 
+/**
+ * Whether `sql` may open a transaction that outlives the statement: SQL `BEGIN` or `START
+ * TRANSACTION`, or anything about autocommit. A plain word search over the whole text,
+ * comments and literals included, so it errs only one way: it may suspect a transaction
+ * where there is none (and then a request is not run again on a replacement session), never
+ * the other way round.
+ */
+export function mayOpenTransaction(sql: string): boolean {
+  return /\b(?:begin|start\s+transaction|autocommit)\b/i.test(sql);
+}
+
 const replacedNote = (oldId: string, newId: string): string =>
   ` (note: the server lost session ${oldId} and this ran in replacement session ${newId}, which has the ` +
   `connection's options but not the old session's temporary tables, SQL-level settings or prepared statements)`;
+
+/** `lost` for sessionLostError when a transaction may have been open, which the client can't tell. */
+export const maybeTransaction = "\u0000maybe-transaction";
 
 /** The error for an operation that could not run because its session is gone (§5.6). */
 export function sessionLostError(
@@ -58,7 +73,11 @@ export function sessionLostError(
   lost: string,
 ): ChargewireError {
   let message = `the server no longer has session ${oldId} (${cause.message})`;
-  if (lost !== "") message += `; the ${lost} that lived in it is gone`;
+  if (lost === maybeTransaction) {
+    message +=
+      "; SQL that can begin a transaction (BEGIN, START TRANSACTION, autocommit) ran in it, so a " +
+      "transaction may have been open there and is gone, and this did not run again";
+  } else if (lost !== "") message += `; the ${lost} that lived in it is gone`;
   message +=
     newId !== undefined
       ? `; the client opened session ${newId} with the connection's options, so the connection can be used again`
@@ -79,6 +98,8 @@ export class Session {
   #replacements = 0;
   #closed = false;
   #replacing: { failedId: string; promise: Promise<string> } | undefined;
+  /** The sessions in which SQL ran that may have opened a transaction (mayOpenTransaction). */
+  readonly #maybeTransactionIn = new Set<string>();
   /** The idle timeout the server announced. */
   idleTimeoutS: number | undefined;
 
@@ -91,9 +112,14 @@ export class Session {
   }
 
   /** Creates a session (§5.1). */
-  static async open(http: HttpClient, options: Record<string, unknown>, reconnect: boolean): Promise<Session> {
+  static async open(
+    http: HttpClient,
+    options: Record<string, unknown>,
+    reconnect: boolean,
+    signal?: AbortSignal,
+  ): Promise<Session> {
     const copy = { ...options };
-    const doc = await create(http, copy);
+    const doc = await create(http, copy, signal);
     return new Session(http, reconnect, copy, doc);
   }
 
@@ -117,6 +143,22 @@ export class Session {
   /** Whether the client turned autocommit off. */
   get inTransaction(): boolean {
     return this.#options["autocommit"] === false;
+  }
+
+  /** Records SQL sent to session `sessionId` (a statement, or a statement prepared there). */
+  noteSql(sessionId: string, sql: string): void {
+    if (mayOpenTransaction(sql)) this.#maybeTransactionIn.add(sessionId);
+  }
+
+  /**
+   * What may have been lost with session `sessionId`, besides temporary state: `open
+   * transaction` (autocommit is off, or the server said so), `maybeTransaction` (SQL that can
+   * begin one ran there), or `""` when the client knows no transaction was open (§5.7).
+   */
+  transactionLost(sessionId: string, err: ChargewireError): string {
+    if (this.inTransaction || lostTransaction(err)) return "open transaction";
+    if (this.#maybeTransactionIn.has(sessionId)) return maybeTransaction;
+    return "";
   }
 
   /** The options set through this session, replayed on a replacement. */
@@ -186,12 +228,14 @@ export class Session {
         });
       }
       if (scope === "handle") throw sessionLostError(err, id, newId, lostWhat);
-      // A session ended for an idle transaction had one open, whether the client turned
-      // autocommit off or the SQL ran BEGIN (which the client can't see): never run a
-      // statement of it again on the replacement, in autocommit.
-      if (scope === "statement" && (this.inTransaction || lostTransaction(err))) {
-        throw sessionLostError(err, id, newId, "open transaction");
-      }
+      // §5.7: never run a request again on the replacement unless no transaction was open in
+      // the lost session. A session ended for an idle transaction had one, whether the client
+      // turned autocommit off or the SQL ran BEGIN; after session_not_found the client can't
+      // tell, unless no SQL that can begin one ran there. A statement run again would commit
+      // on its own; a session request (options, metadata) run again would hide the loss, and
+      // the next statement would.
+      const lostTransactionWhat = this.transactionLost(id, err);
+      if (lostTransactionWhat !== "") throw sessionLostError(err, id, newId, lostTransactionWhat);
       if (req.body?.stream !== undefined) {
         throw sessionLostError(err, id, newId, "upload (it streamed, so it cannot be sent again)");
       }
@@ -265,9 +309,10 @@ export class Session {
     if (this.#closed) return;
     this.#closed = true;
     try {
-      await this.#http.void({ method: "DELETE", path: sessionPath(this.#id), idempotent: true });
+      // A stopped server (server_resuming) holds no sessions: closed too, without waiting for it.
+      await this.#http.void({ method: "DELETE", path: sessionPath(this.#id), idempotent: true, resume: false });
     } catch (err) {
-      if (ChargewireError.is(err, ErrorCode.sessionNotFound)) return;
+      if (ChargewireError.is(err, ErrorCode.sessionNotFound, ErrorCode.serverResuming)) return;
       throw err;
     }
   }
@@ -294,7 +339,11 @@ export class Session {
   }
 }
 
-async function create(http: HttpClient, options: Record<string, unknown>): Promise<SessionDocument> {
+async function create(
+  http: HttpClient,
+  options: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<SessionDocument> {
   // Creating a session is not idempotent, but a retry after a lost answer only leaves an
   // unused session behind, which the server evicts when idle.
   const doc = await http.json<SessionDocument>({
@@ -302,6 +351,7 @@ async function create(http: HttpClient, options: Record<string, unknown>): Promi
     path: "/v1/sessions",
     body: jsonBody({ options }),
     idempotent: true,
+    signal,
   });
   if (typeof doc.session_id !== "string" || doc.session_id === "") {
     throw protocolError("the server created a session without an id");

@@ -20,6 +20,8 @@ export const Capability = {
   resultLocations: "result_locations",
   mtlsIdentity: "mtls_identity",
   oauthBrowser: "oauth_browser",
+  /** `GET /chargewire/v1/openapi.json`, the OpenAPI description, and `links.openapi` in discovery (§3.3). */
+  openapi: "openapi",
 } as const;
 
 /** The document `GET /chargewire` returns (§3.1). */
@@ -33,6 +35,8 @@ export interface DiscoveryDocument {
     /** Browser sign-in (§4.3), when the server offers it: the identity provider's name for people. */
     oauth_browser?: { provider?: string };
   };
+  /** Where the server's optional documents are (§3.3): `openapi`, with capability `openapi`. */
+  links?: { openapi?: string; [key: string]: unknown };
   [key: string]: unknown;
 }
 
@@ -53,7 +57,14 @@ export interface SessionDocument {
    * value it doesn't know (a later version's, §12) as `unknown`.
    */
   transaction: TransactionState;
+  /** How long the session may go without a request before the server may evict it (§5.7). */
   idle_timeout_s?: number;
+  /**
+   * How long the session may hold a transaction open with nothing running and no request
+   * before the server ends it with `session_ended`, reason `idle_in_transaction` (§5.7); `0`
+   * when the server has no such limit.
+   */
+  idle_in_transaction_timeout_s?: number;
 }
 
 /**

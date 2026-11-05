@@ -206,6 +206,25 @@ describe("lost sessions (§5.6)", () => {
     expect(await scalar(await open(), "SELECT sum(v)::BIGINT FROM lost_tx")).toBe(3);
   });
 
+  test("after SQL BEGIN, a lost session's next statement fails rather than run alone in autocommit (§5.7)", async () => {
+    const conn = await open();
+    const other = await open();
+    await conn.execute("CREATE OR REPLACE TABLE lost_begin (v INTEGER)");
+    await conn.execute("BEGIN");
+    await conn.execute("INSERT INTO lost_begin VALUES (1)");
+    const old = conn.sessionId;
+    await killSession(shared, old);
+    const err = await expectCode(conn.execute("INSERT INTO lost_begin VALUES (2)"), ErrorCode.sessionNotFound);
+    expect(err.message).toContain("a transaction may have been open there");
+    expect(err.lostSessionId).toBe(old);
+    expect(err.replacementSessionId).toBe(conn.sessionId);
+    // Neither insert is there: the first was rolled back with the session, the second never ran again.
+    expect(await scalar(other, "SELECT count(*) FROM lost_begin")).toBe(0);
+    // The replacement is usable, in autocommit.
+    expect(await conn.execute("INSERT INTO lost_begin VALUES (3)")).toBe(1);
+    expect(await scalar(other, "SELECT count(*) FROM lost_begin")).toBe(1);
+  });
+
   test("commit of a lost transaction fails rather than pretending", async () => {
     const conn = await open();
     await conn.setAutocommit(false);

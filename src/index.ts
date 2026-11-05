@@ -44,7 +44,7 @@ export {
 } from "./errors.js";
 export type { JsonScalar, Parameters } from "./params.js";
 export type { ArrowInput } from "./ipc.js";
-export type { Logger } from "./http.js";
+export type { Logger, ResumingEvent } from "./http.js";
 export type { TlsOptions } from "./platform/types.js";
 export { Capability } from "./protocol.js";
 export type {

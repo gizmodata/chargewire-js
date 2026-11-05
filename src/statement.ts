@@ -60,6 +60,8 @@ export class Execution {
   readonly settings: StatementSettings;
   readonly key = newIdempotencyKey();
   readonly body: RequestBody;
+  /** The statement's SQL (a prepared statement's), for the session's transaction bookkeeping. */
+  readonly sql: string;
   readonly prepared: PreparedRef | undefined;
   /** The session the request went to. */
   sessionId: string | undefined;
@@ -86,9 +88,11 @@ export class Execution {
     body: RequestBody,
     prepared: PreparedRef | undefined,
     signal: AbortSignal | undefined,
+    sql: string,
   ) {
     core.checkOpen();
     this.core = core;
+    this.sql = sql;
     this.settings = settings;
     this.body = body;
     this.prepared = prepared;
@@ -160,6 +164,10 @@ export class Execution {
       onSend: () => {
         this.sent = true;
       },
+      // A server that answers server_resuming did not take the statement: nothing to cancel there.
+      onNotTaken: () => {
+        this.sent = false;
+      },
     };
   }
 
@@ -168,10 +176,12 @@ export class Execution {
     const session = this.core.session;
     if (this.prepared !== undefined) {
       this.sessionId = this.prepared.sessionId;
+      session.noteSql(this.sessionId, this.sql);
       return session.doHandle(this.sessionId, "prepared statement", this.#request(this.sessionId, mode, this.signal));
     }
     return session.do("statement", "", (id) => {
       this.sessionId = id;
+      session.noteSql(id, this.sql);
       return this.#request(id, mode, this.signal);
     });
   }
@@ -181,10 +191,14 @@ export class Execution {
     if (this.body.stream !== undefined || this.sessionId === undefined) return undefined;
     let doc: StatementDocument;
     try {
-      doc = await this.core.http.json<StatementDocument>(
-        this.#request(this.sessionId, { arrow: false, async: true }, signal),
-      );
+      // Never waited out on a resuming server: one that answers server_resuming has not taken the
+      // statement, and repeating the submission once it is back would run it.
+      doc = await this.core.http.json<StatementDocument>({
+        ...this.#request(this.sessionId, { arrow: false, async: true }, signal),
+        resume: false,
+      });
     } catch (err) {
+      if (ChargewireError.is(err, ErrorCode.serverResuming)) return undefined;
       // A statement that already failed or was cancelled may answer with its error (§6.1).
       if (err instanceof ChargewireError && err.statementId !== undefined) return err.statementId;
       throw err;
@@ -255,6 +269,11 @@ export class Execution {
   async cancel(reason?: unknown): Promise<void> {
     if (this.#finished) return;
     this.cancelled = true;
+    if (!this.sent && this.statementId === undefined && !this.#controller.signal.aborted) {
+      // The server has nothing of it (not sent yet, or refused unrun: server_resuming, a token
+      // being renewed): stop at once, without waiting for a cancel request.
+      this.#controller.abort(reason ?? this.cancelledError());
+    }
     this.#stopping ??= this.#stopOnServer().catch((err: unknown) =>
       this.core.logger.debug?.("cancelling on the server failed", { error: String(err) }),
     );
@@ -278,9 +297,16 @@ export class Execution {
       if (!this.sent || this.sessionId === undefined) return;
       if (this.core.running === 1) {
         try {
-          await http.void({ method: "POST", path: `${sessionPath(this.sessionId)}/cancel`, idempotent: true, signal });
+          await http.void({
+            method: "POST",
+            path: `${sessionPath(this.sessionId)}/cancel`,
+            idempotent: true,
+            signal,
+            resume: false,
+          });
           return;
         } catch (err) {
+          if (ChargewireError.is(err, ErrorCode.serverResuming)) return; // a stopped server runs nothing
           if (!unsupported(err)) throw err;
         }
       }
@@ -288,9 +314,15 @@ export class Execution {
       if (this.statementId === undefined) return;
     }
     try {
-      await http.void({ method: "POST", path: `${this.#statementPath()}/cancel`, idempotent: true, signal });
+      await http.void({
+        method: "POST",
+        path: `${this.#statementPath()}/cancel`,
+        idempotent: true,
+        signal,
+        resume: false,
+      });
     } catch (err) {
-      if (!ChargewireError.is(err, ErrorCode.statementNotFound)) throw err;
+      if (!ChargewireError.is(err, ErrorCode.statementNotFound, ErrorCode.serverResuming)) throw err;
     }
   }
 
@@ -309,9 +341,16 @@ export class Execution {
     const http = this.core.http;
     this.core.background("statement delete", async () => {
       try {
-        await http.void({ method: "DELETE", path, idempotent: true, signal: AbortSignal.timeout(10_000) });
+        await http.void({
+          method: "DELETE",
+          path,
+          idempotent: true,
+          signal: AbortSignal.timeout(10_000),
+          resume: false,
+        });
       } catch (err) {
-        if (!ChargewireError.is(err, ErrorCode.statementNotFound, ErrorCode.sessionNotFound)) throw err;
+        if (!ChargewireError.is(err, ErrorCode.statementNotFound, ErrorCode.sessionNotFound, ErrorCode.serverResuming))
+          throw err;
       }
     });
   }

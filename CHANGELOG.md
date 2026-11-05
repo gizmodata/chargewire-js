@@ -6,6 +6,52 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-11-05
+
+### Added
+
+- A server that is starting again after a stop (`server_resuming`: 503 with `Retry-After`) no
+  longer fails the request: the client waits the `Retry-After` (3 s when absent, 1 s to 60 s) and
+  sends the same request again, the login and commits included, until the server answers
+  something else or the new `resumeTimeout` option (seconds, default `600`; `0` turns the retries
+  off) has passed since the first such answer. Then the error is the server's `server_resuming`
+  (`ErrorCode.serverResuming`), with its message. These repeats do not count against
+  `maxAttempts`; other 503 answers, `server_draining` among them, keep the usual retries.
+- `onResuming`, a `connect` option called each time a request gets `server_resuming`, before the
+  wait, with `{ attempt, retryAfterMs, elapsedMs, resumeTimeoutMs, detail }` (exported as
+  `ResumingEvent`), so an application can show that the server is resuming instead of looking
+  frozen. An exception it throws is ignored and the retries go on.
+- Aborting a call's signal during a wait for a resuming server stops it at once and sends no
+  cancel request (the server took nothing), also while the call waits for a token renewal that
+  the resuming server holds. Callers share that login, which goes on while any of them still
+  waits. `close()`, of a connection or a prepared statement, and the client's own cancels and
+  deletes do not wait for a resuming server: a stopped server holds no sessions or statements.
+- `SessionDocument.idle_in_transaction_timeout_s` (§5.1, §5.7), `DiscoveryDocument.links` (§3.3)
+  and `Capability.openapi` (§3.1), from the spec. A unit test checks the client's reason, state
+  and capability lists against the spec's tables, at compile time where the types are open.
+
+### Fixed
+
+- The exported `SessionEndedReason` type lists `idle_in_transaction` (spec §5.6), so code can
+  narrow on it: Hardcharger 2.7.0 (Chargewire 2.1.0) ends a session with it when its transaction
+  sat idle past the server's limit, and Chargewire 2.1.1 also when a session evicted as idle held
+  a transaction open. The type took any string before, so nothing failed to compile. Each reason
+  now carries its meaning from the spec in a doc comment.
+- A request that finds its session lost runs again on the replacement only when the client knows
+  no transaction was open in the lost session (spec §5.7, Chargewire 2.1.1;
+  [gizmodata/hardcharger#29](https://github.com/gizmodata/hardcharger/issues/29)). After
+  `session_not_found` a statement used to run again in autocommit whenever autocommit was on,
+  even after SQL `BEGIN` had opened a transaction that went with the session, so it committed on
+  its own while the transaction's earlier statements were gone. It now fails (the replacement is
+  open, so the next call works) when SQL that can begin a transaction (`BEGIN`, `START
+  TRANSACTION`, anything naming autocommit) ran in the lost session; a session that ran no such
+  SQL is still replaced without a failure. A session request (metadata, options, the session
+  document) that finds such a loss, or `idle_in_transaction`, or a loss with autocommit off, fails
+  the same way instead of running again and hiding it from the statements that follow. A
+  prepared statement is prepared again and run under the same condition.
+- `connect`'s `signal` now also stops the login and the session's creation (it reached discovery
+  only), which matters now that a login can wait minutes for a resuming server.
+
 ## [2.1.0] - 2026-11-04
 
 ### Changed

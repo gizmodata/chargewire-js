@@ -121,6 +121,7 @@ describe("problem documents (§11)", () => {
       "internal_error",
       "not_implemented",
       "server_draining",
+      "server_resuming",
       // Browser sign-in (§4.3): flow_not_found (404), invalid_return_to (400), and a failed flow's error.code values.
       "flow_not_found",
       "invalid_return_to",
@@ -159,6 +160,23 @@ describe("problem documents (§11)", () => {
     expect(tokenRenewable("token_revoked")).toBe(false);
     expect(tokenRenewable("credentials_changed")).toBe(false);
     expect(tokenRenewable("principal_dropped")).toBe(false);
+  });
+
+  test("server_resuming carries its status, message and Retry-After", async () => {
+    const err = await responseError(
+      problem(
+        503,
+        {
+          type: "urn:chargewire:error:server_resuming",
+          code: "server_resuming",
+          status: 503,
+          detail: "the server is resuming; retry after 3 s",
+        },
+        { "retry-after": "3" },
+      ),
+    );
+    expect(err).toMatchObject({ code: ErrorCode.serverResuming, status: 503, retryAfterMs: 3000 });
+    expect(err.message).toContain("the server is resuming; retry after 3 s");
   });
 
   test("unknown codes are kept as sent (§12)", async () => {
