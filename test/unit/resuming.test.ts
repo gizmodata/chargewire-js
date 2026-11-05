@@ -7,7 +7,7 @@ import type { AddressInfo } from "node:net";
 
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
-import { type Connection, ErrorCode, ChargewireError, connect } from "../../src/index.js";
+import { type Connection, ErrorCode, ChargewireError, type ResumingEvent, connect } from "../../src/index.js";
 import { type ResumeClock, abortError, resumeRetryAfterMs, setResumeClockForTesting } from "../../src/http.js";
 import { FakeServer, json, problem } from "./fake.js";
 
@@ -252,5 +252,178 @@ describe("server_resuming", () => {
       http.closeAllConnections();
       await new Promise<void>((resolve) => http.close(() => resolve()));
     }
+  });
+});
+
+describe("onResuming", () => {
+  test("is told each attempt before its wait: attempt, wait, time since the first answer, limit, detail", async () => {
+    const server = new FakeServer();
+    const events: { event: ResumingEvent; waitsSoFar: number }[] = [];
+    const record = (event: ResumingEvent): void => {
+      events.push({ event, waitsSoFar: clock.waits.length });
+    };
+    const logins = resumingLogins(server, 3, "4");
+    let calls = 0;
+    server.on("POST", /\/statements$/, () =>
+      ++calls <= 2 ? resuming(calls === 1 ? undefined : "90") : json(200, updateDoc),
+    );
+    const conn = await open(server, { resumeTimeout: 100, onResuming: record });
+    expect(logins()).toBe(4);
+    // The login's three answers: each reported before its wait (no wait recorded yet for it).
+    expect(events.map((e) => e.event)).toEqual(
+      [1, 2, 3].map((attempt) => ({
+        attempt,
+        retryAfterMs: 4000,
+        elapsedMs: (attempt - 1) * 4000,
+        resumeTimeoutMs: 100_000,
+        detail: "fake server_resuming",
+      })),
+    );
+    expect(events.map((e) => e.waitsSoFar)).toEqual([0, 1, 2]);
+    // A statement counts its own attempts, from 1 and from its own first answer.
+    events.length = 0;
+    expect(await conn.execute("UPDATE t SET x = 1")).toBe(3);
+    expect(events.map((e) => e.event)).toEqual([
+      { attempt: 1, retryAfterMs: 3000, elapsedMs: 0, resumeTimeoutMs: 100_000, detail: "fake server_resuming" },
+      { attempt: 2, retryAfterMs: 60_000, elapsedMs: 3000, resumeTimeoutMs: 100_000, detail: "fake server_resuming" },
+    ]);
+    await conn.close();
+  });
+
+  test("the last wait before the deadline is reported as the time left; the final answer is not reported", async () => {
+    const server = new FakeServer();
+    resumingLogins(server, Number.MAX_SAFE_INTEGER, "4");
+    const events: ResumingEvent[] = [];
+    const err = await failure(open(server, { resumeTimeout: 10, onResuming: (e: ResumingEvent) => events.push(e) }));
+    expectResumingError(err);
+    expect(events.map((e) => [e.attempt, e.retryAfterMs, e.elapsedMs])).toEqual([
+      [1, 4000, 0],
+      [2, 4000, 4000],
+      [3, 2000, 8000],
+    ]);
+  });
+
+  test("a callback that throws does not stop the retries", async () => {
+    const server = new FakeServer();
+    const logins = resumingLogins(server, 3, "2");
+    let calls = 0;
+    const conn = await open(server, {
+      onResuming: () => {
+        calls++;
+        throw new Error("the progress bar broke");
+      },
+    });
+    expect(calls).toBe(3);
+    expect(logins()).toBe(4);
+    expect(clock.waits).toEqual([2000, 2000, 2000]);
+    expect(await conn.execute("SELECT 1").catch(() => "ran")).toBeDefined();
+    await conn.close();
+  });
+
+  test("an onResuming that is not a function is refused", async () => {
+    const err = await failure(open(new FakeServer(), { onResuming: "yes" }));
+    expect(err.code).toBe(ErrorCode.clientInvalidArgument);
+  });
+
+  test("aborting a call's signal during a wait stops it at once, on the real clock", async () => {
+    setResumeClockForTesting(previous);
+    const server = new FakeServer();
+    server.on("POST", /\/statements$/, () => resuming("60"));
+    const conn = await open(server);
+    const controller = new AbortController();
+    const started = performance.now();
+    const work = conn.execute("UPDATE t SET x = 1", undefined, { signal: controller.signal });
+    while (server.count("POST", /\/statements$/) === 0) await new Promise((r) => setTimeout(r, 5));
+    await new Promise((r) => setTimeout(r, 50)); // now in its 60 s wait
+    controller.abort();
+    const err = await failure(work);
+    expect(err.code).toBe(ErrorCode.statementCancelled);
+    expect(performance.now() - started).toBeLessThan(2000);
+    expect(server.count("POST", /\/statements$/)).toBe(1);
+    // The server never took it, so there was nothing to cancel there either.
+    expect(server.count("POST", /\/cancel$/)).toBe(0);
+    await conn.close();
+  });
+
+  test("aborting from onResuming stops before the wait", async () => {
+    const server = new FakeServer();
+    server.on("POST", /\/statements$/, () => resuming("60"));
+    const controller = new AbortController();
+    const conn = await open(server, { onResuming: () => controller.abort() });
+    const err = await failure(conn.execute("UPDATE t SET x = 1", undefined, { signal: controller.signal }));
+    expect(err.code).toBe(ErrorCode.statementCancelled);
+    expect(clock.waits).toEqual([]);
+    await conn.close();
+  });
+
+  test("a call's signal also stops its wait for a token renewal held by a resuming server", async () => {
+    const server = new FakeServer();
+    const conn = await open(server);
+    server.on("POST", /\/statements$/, () => json(200, updateDoc));
+    // The server forgot the token; the renewal's login now answers server_resuming.
+    server.validTokens.clear();
+    const logins = resumingLogins(server, Number.MAX_SAFE_INTEGER, "60");
+    const controller = new AbortController();
+    clock.sleep = (_ms, signal) =>
+      new Promise((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(abortError(signal)), { once: true });
+        controller.abort();
+      });
+    const err = await failure(conn.execute("UPDATE t SET x = 1", undefined, { signal: controller.signal }));
+    expect(err.code).toBe(ErrorCode.statementCancelled);
+    expect(logins()).toBe(1);
+    // close() needs a token too, and the server is resuming: it does not wait for it (this
+    // clock's waits never end on their own, so a close that waited would never return).
+    await conn.close();
+  });
+
+  test("a shared login goes on for a caller still waiting when another gives up", async () => {
+    const server = new FakeServer();
+    const conn = await open(server);
+    server.on("POST", /\/statements$/, () => json(200, updateDoc));
+    server.validTokens.clear();
+    const logins = resumingLogins(server, 2, "5");
+    const controller = new AbortController();
+    const release: (() => void)[] = [];
+    clock.sleep = (ms, signal) =>
+      new Promise<void>((resolve, reject) => {
+        clock.waits.push(ms);
+        signal?.addEventListener("abort", () => reject(abortError(signal)), { once: true });
+        release.push(resolve);
+      });
+    const quitter = conn.execute("UPDATE t SET x = 1", undefined, { signal: controller.signal });
+    const stayer = conn.execute("UPDATE t SET x = 2");
+    while (release.length === 0) await new Promise((r) => setTimeout(r, 1));
+    controller.abort();
+    expect((await failure(quitter)).code).toBe(ErrorCode.statementCancelled);
+    // The login waits on for the other caller, then finishes.
+    while (release.length > 0) {
+      release.shift()!();
+      await new Promise((r) => setTimeout(r, 1));
+    }
+    expect(await stayer).toBe(3);
+    expect(logins()).toBe(3);
+    await conn.close();
+  });
+
+  test("close() does not wait for a resuming server: a stopped server holds no session", async () => {
+    const server = new FakeServer();
+    server.on("DELETE", /\/sessions\/s1$/, () => resuming("60"));
+    const conn = await open(server);
+    await conn.close();
+    expect(server.count("DELETE", /\/sessions\/s1$/)).toBe(1);
+    expect(clock.waits).toEqual([]);
+  });
+
+  test("a prepared statement's close does not wait for a resuming server either", async () => {
+    const server = new FakeServer();
+    server.on("POST", /\/prepared$/, () => json(201, { prepared_id: "p1", parameter_schema: null }));
+    server.on("DELETE", /\/prepared\/p1$/, () => resuming("60"));
+    const conn = await open(server);
+    const q = await conn.prepare("SELECT 1");
+    await q.close();
+    expect(server.count("DELETE", /\/prepared\/p1$/)).toBe(1);
+    expect(clock.waits).toEqual([]);
+    await conn.close();
   });
 });

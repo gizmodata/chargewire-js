@@ -89,6 +89,14 @@ export interface HttpRequest {
   signal?: AbortSignal | undefined;
   /** Called when the request is handed to fetch. */
   onSend?: () => void;
+  /**
+   * `false`: a `server_resuming` answer is the error at once, not waited out. For requests
+   * whose point is moot on a server that is not running (cancels and deletes: a stopped
+   * server holds no statements, sessions or results). Default true.
+   */
+  resume?: boolean;
+  /** Called when the server did not take the request (`server_resuming`, or `invalid_token` before a renewal). */
+  onNotTaken?: () => void;
 }
 
 export interface HttpClientConfig {
@@ -107,6 +115,26 @@ export interface HttpClientConfig {
    * first such answer, in milliseconds; 0 reports the first one. Default 600 s.
    */
   resumeTimeoutMs?: number;
+  /** Told each time a `server_resuming` answer is about to be waited out (`ConnectOptions.onResuming`). */
+  onResuming?: ((event: ResumingEvent) => void) | undefined;
+}
+
+/**
+ * What `onResuming` is told each time the server answers a request with `server_resuming`
+ * and the client is about to wait before sending it again. Each request counts on its own:
+ * requests made at the same time each report their own attempts.
+ */
+export interface ResumingEvent {
+  /** 1 for the request's first `server_resuming` answer, 2 for the next, and so on. */
+  attempt: number;
+  /** How long the client now waits before sending the request again, in milliseconds. */
+  retryAfterMs: number;
+  /** Time since the request's first `server_resuming` answer, in milliseconds (0 at the first). */
+  elapsedMs: number;
+  /** How long the client keeps trying from the first answer (`resumeTimeout`), in milliseconds. */
+  resumeTimeoutMs: number;
+  /** The server's explanation (the problem document's `detail`), for people. */
+  detail: string;
 }
 
 /** The default `resumeTimeout`, in seconds. */
@@ -164,9 +192,15 @@ export class HttpClient {
   readonly #userAgent: string | undefined;
   readonly #fetchCredentials: RequestCredentials | undefined;
   readonly #resumeTimeoutMs: number;
+  readonly #onResuming: ((event: ResumingEvent) => void) | undefined;
   #token: string | undefined;
   #renewAt: number | undefined; // when to replace the token; undefined when its lifetime is unknown
-  #renewing: Promise<void> | undefined;
+  /** The login under way, shared by every caller that needs a token; stopped once every caller has given up. */
+  #renewing: { promise: Promise<void>; controller: AbortController; waiting: number } | undefined;
+  /** The server's latest answer, when it was `server_resuming`: the server is not running now. */
+  #resumingAnswer: ChargewireError | undefined;
+  /** Callers waiting for a login that give up when the server answers `server_resuming` (renewToken). */
+  readonly #resumingWatchers = new Set<(err: ChargewireError) => void>();
   /** Talking to a server from before the protocol's rename, in its spelling. */
   #legacy = false;
   /**
@@ -186,6 +220,7 @@ export class HttpClient {
     this.#userAgent = config.userAgent;
     this.#fetchCredentials = config.fetchCredentials;
     this.#resumeTimeoutMs = config.resumeTimeoutMs ?? defaultResumeTimeoutSeconds * 1000;
+    this.#onResuming = config.onResuming;
     if (config.credentials.kind === "static") this.#token = config.credentials.token;
   }
 
@@ -306,9 +341,10 @@ export class HttpClient {
       return wait;
     };
     let renewed = false;
-    let resumeDeadline: number | undefined; // set by the first server_resuming answer
+    let resumeStart: number | undefined; // set by the first server_resuming answer
+    let resumeAttempts = 0;
     for (let attempt = 1; ; attempt++) {
-      const token = req.anonymous ? undefined : await this.accessToken();
+      const token = req.anonymous ? undefined : await this.accessToken(req.signal, req.resume !== false);
       const canRepeat = replayable(req.body) && attempt < this.#maxAttempts;
       let resp: Response;
       try {
@@ -322,16 +358,25 @@ export class HttpClient {
         await sleep(nextBackoff(), req.signal);
         continue;
       }
-      if (resp.status >= 200 && resp.status < 300) return resp;
+      if (resp.status >= 200 && resp.status < 300) {
+        this.#resumingAnswer = undefined;
+        return resp;
+      }
       const problem = await responseError(resp);
+      if (resp.status !== 503 || problem.code !== ErrorCode.serverResuming) this.#resumingAnswer = undefined;
+      else {
+        this.#resumingAnswer = problem;
+        for (const stop of [...this.#resumingWatchers]) stop(problem);
+      }
       if (resp.status === 503 && problem.code === ErrorCode.serverResuming) {
         // The server did not take the request, so any request may be sent again, but only by
         // this loop: not by the retries below, which give up after a few attempts.
-        if (this.#resumeTimeoutMs <= 0 || !replayable(req.body)) throw problem;
+        req.onNotTaken?.();
+        if (this.#resumeTimeoutMs <= 0 || req.resume === false || !replayable(req.body)) throw problem;
         const clock = resumeClock;
         const now = clock.now();
-        resumeDeadline ??= now + this.#resumeTimeoutMs;
-        const remaining = resumeDeadline - now;
+        resumeStart ??= now;
+        const remaining = resumeStart + this.#resumeTimeoutMs - now;
         if (remaining <= 0) {
           throw problem.with({
             message:
@@ -341,6 +386,22 @@ export class HttpClient {
         }
         const wait = Math.min(resumeRetryAfterMs(problem.retryAfterMs), remaining);
         this.logger.debug?.("server resuming; retrying", { path: req.path, wait });
+        resumeAttempts++;
+        if (this.#onResuming !== undefined) {
+          try {
+            this.#onResuming({
+              attempt: resumeAttempts,
+              retryAfterMs: wait,
+              elapsedMs: now - resumeStart,
+              resumeTimeoutMs: this.#resumeTimeoutMs,
+              detail: problem.detail ?? problem.title ?? problem.message,
+            });
+          } catch (err) {
+            // The application's progress report must not stop the retries.
+            this.logger.debug?.("onResuming threw; ignored", { error: String(err) });
+          }
+        }
+        if (req.signal?.aborted) throw abortError(req.signal);
         await clock.sleep(wait, req.signal);
         attempt--;
         continue;
@@ -354,7 +415,8 @@ export class HttpClient {
         replayable(req.body)
       ) {
         renewed = true;
-        await this.renewToken(token);
+        req.onNotTaken?.(); // refused before it ran
+        await this.renewToken(token, req.signal, req.resume !== false);
         attempt--;
         continue;
       }
@@ -418,11 +480,14 @@ export class HttpClient {
     if (this.canRenew) await this.renewToken(undefined, signal);
   }
 
-  /** A token to send, renewed first when it is about to expire. */
-  async accessToken(): Promise<string | undefined> {
+  /**
+   * A token to send, renewed first when it is about to expire. `signal` stops waiting for the
+   * renewal; `resume` false, waiting for a resuming server (see renewToken).
+   */
+  async accessToken(signal?: AbortSignal, resume = true): Promise<string | undefined> {
     if (this.#fresh()) return this.#token;
     if (!this.canRenew) return this.#token; // issued elsewhere: send it, the server decides
-    await this.renewToken(this.#token);
+    await this.renewToken(this.#token, signal, resume);
     return this.#token;
   }
 
@@ -430,15 +495,51 @@ export class HttpClient {
     return this.#token !== undefined && (this.#renewAt === undefined || Date.now() < this.#renewAt);
   }
 
-  /** Replaces `stale` with a new token, unless another caller already did. */
-  async renewToken(stale: string | undefined, signal?: AbortSignal): Promise<void> {
+  /**
+   * Replaces `stale` with a new token, unless another caller already did. Callers share one
+   * login; `signal` stops this caller's wait for it (a login can wait minutes for a resuming
+   * server), and the login itself stops once every caller waiting for it has given up. With
+   * `resume` false the caller does not wait for a resuming server either: once the server
+   * answers `server_resuming` (the login, or any request), that answer is this caller's error.
+   */
+  async renewToken(stale: string | undefined, signal?: AbortSignal, resume = true): Promise<void> {
     if (this.#token !== stale && this.#fresh()) return;
-    if (this.#renewing === undefined) {
-      this.#renewing = this.#obtain(signal).finally(() => {
-        this.#renewing = undefined;
+    if (signal?.aborted) throw abortError(signal);
+    if (!resume && this.#resumingAnswer !== undefined) throw this.#resumingAnswer;
+    let renewing = this.#renewing;
+    if (renewing === undefined) {
+      const controller = new AbortController();
+      const promise = this.#obtain(controller.signal).finally(() => {
+        if (this.#renewing?.promise === promise) this.#renewing = undefined;
       });
+      renewing = { promise, controller, waiting: 0 };
+      this.#renewing = renewing;
     }
-    await this.#renewing;
+    const login = renewing.promise;
+    renewing.waiting++;
+    let gaveUp = false;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const stop = (err: ChargewireError): void => {
+          gaveUp = true;
+          reject(err);
+        };
+        const onAbort = (): void => stop(abortError(signal!));
+        signal?.addEventListener("abort", onAbort, { once: true });
+        if (!resume) this.#resumingWatchers.add(stop);
+        login.then(resolve, reject).finally(() => {
+          signal?.removeEventListener("abort", onAbort);
+          this.#resumingWatchers.delete(stop);
+        });
+      });
+    } finally {
+      renewing.waiting--;
+      if (renewing.waiting === 0 && gaveUp) {
+        // Nobody waits for this login any more: stop it, and let the next caller start afresh.
+        if (this.#renewing === renewing) this.#renewing = undefined;
+        renewing.controller.abort(signal?.reason);
+      }
+    }
   }
 
   async #obtain(signal?: AbortSignal): Promise<void> {

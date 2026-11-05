@@ -172,18 +172,19 @@ client for any Chargewire server. Another wrapper can add a scheme of its own by
 
 Other `connect` options:
 
-| Option                                                                                                         | Default        | Meaning                                                                                                     |
-| -------------------------------------------------------------------------------------------------------------- | -------------- | ----------------------------------------------------------------------------------------------------------- |
-| `catalog`, `schema`, `sessionOptions`                                                                          |                | The session's options (§5.3), replayed on a replacement session                                             |
-| `tls`                                                                                                          | system         | Node, Deno, Bun: `{ ca, cert, key, servername, skipVerify }` (PEM text)                                     |
-| `fetch`                                                                                                        | global         | Your own `fetch` (not together with `tls`)                                                                  |
-| `fetchCredentials`                                                                                             | runtime's      | fetch's credentials mode; `"include"` by default in a browser with `authType: "client_certificate"`         |
-| `maxAttempts`                                                                                                  | `4`            | Sends of a request that is safe to repeat, first included                                                   |
-| `resumeTimeout`                                                                                                | `600`          | Seconds to keep repeating a request while the server answers `server_resuming`; `0`: no retries (see below) |
-| `reconnect`                                                                                                    | `true`         | Replace a session the server lost                                                                           |
-| `resultBufferBytes`                                                                                            | 128 MiB        | How much of an unread stream may be read ahead when the session is needed for something else                |
-| `logger`                                                                                                       | `console.warn` | `{ debug, warn }`; session replacements are warnings                                                        |
-| `async`, `retainResult`, `statementTimeoutMs`, `queryTag`, `ipcCompression`, `resultPartitions`, `resultOrder` |                | Defaults for every statement (below)                                                                        |
+| Option                                                                                                         | Default        | Meaning                                                                                                             |
+| -------------------------------------------------------------------------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `catalog`, `schema`, `sessionOptions`                                                                          |                | The session's options (§5.3), replayed on a replacement session                                                     |
+| `tls`                                                                                                          | system         | Node, Deno, Bun: `{ ca, cert, key, servername, skipVerify }` (PEM text)                                             |
+| `fetch`                                                                                                        | global         | Your own `fetch` (not together with `tls`)                                                                          |
+| `fetchCredentials`                                                                                             | runtime's      | fetch's credentials mode; `"include"` by default in a browser with `authType: "client_certificate"`                 |
+| `maxAttempts`                                                                                                  | `4`            | Sends of a request that is safe to repeat, first included                                                           |
+| `resumeTimeout`                                                                                                | `600`          | Seconds to keep repeating a request while the server answers `server_resuming`; `0`: no retries (see below)         |
+| `onResuming`                                                                                                   |                | Called before each wait for a resuming server, with `{ attempt, retryAfterMs, elapsedMs, resumeTimeoutMs, detail }` |
+| `reconnect`                                                                                                    | `true`         | Replace a session the server lost                                                                                   |
+| `resultBufferBytes`                                                                                            | 128 MiB        | How much of an unread stream may be read ahead when the session is needed for something else                        |
+| `logger`                                                                                                       | `console.warn` | `{ debug, warn }`; session replacements are warnings                                                                |
+| `async`, `retainResult`, `statementTimeoutMs`, `queryTag`, `ipcCompression`, `resultPartitions`, `resultOrder` |                | Defaults for every statement (below)                                                                                |
 
 ## 🔐 Client certificate sign-in
 
@@ -370,19 +371,53 @@ Statement options, per call or as `connect` defaults:
   answers something else or `resumeTimeout` seconds (600 by default) have passed since the first
   `server_resuming`; then the error is that `server_resuming`, with the server's message. These
   repeats do not count against `maxAttempts`, and `resumeTimeout: 0` turns them off. `connect`'s
-  `signal` (or a call's) stops the wait. The client sets no per-request timeout of its own, so a held
+  `signal` (or a call's) stops the wait at once, a token renewal's wait included, and sends no
+  cancel (the server took nothing). The client sets no per-request timeout of its own, so a held
   login is never cut short (Node's fetch waits 300 s for an answer's headers). A streamed upload
   over 16 MiB is sent once. Other 503 answers, such as `server_draining`, keep the retries above.
+  `close()` (of a connection or a prepared statement) does not wait for a resuming server: a
+  stopped server holds no sessions.
+
+  `onResuming` reports each wait, so an application can say "the server is resuming" (and offer a
+  Cancel button that aborts `connect`'s or the call's `signal`) instead of looking frozen. It is
+  called each time a request gets `server_resuming`, before the wait, with
+  `{ attempt, retryAfterMs, elapsedMs, resumeTimeoutMs, detail }`: the request's count of such
+  answers (from 1), the wait now starting, the time since its first one, `resumeTimeout` in
+  milliseconds, and the server's message. Each request counts on its own. An exception it throws
+  is ignored and the retries go on.
+
+  ```js
+  const controller = new AbortController();
+  const conn = await connect({
+    url,
+    username,
+    password,
+    signal: controller.signal,
+    onResuming: ({ attempt, elapsedMs, resumeTimeoutMs }) =>
+      showBanner(
+        `The server is resuming (attempt ${attempt}, ${Math.round(elapsedMs / 1000)} s of ${resumeTimeoutMs / 1000} s)`,
+      ),
+  });
+  ```
+
 - **Tokens** are renewed before they expire and, once, when the server refuses one with
   `invalid_token` without a reason, with `token_expired` or with a reason the client doesn't know.
   After `token_revoked`, `credentials_changed` or `principal_dropped` (§4.2) the client does not sign
   in again on its own: the error carries the `reason`.
-- **Lost sessions** (`session_not_found`, or `session_ended` for an expired token when the client
-  can get a new token, which it does first) are replaced by a
-  new session with the options the client set, and the loss is reported, not hidden: a warning,
-  `conn.sessionReplacements`, and errors from work on the replacement say so. Inside a transaction
-  nothing runs on the replacement (it would commit half a transaction). A prepared statement is
-  prepared again. With `reconnect: false` the connection stays broken.
+- **Lost sessions** (`session_not_found`; `session_ended` for an idle transaction,
+  `idle_in_transaction`; or `session_ended` for an expired token when the client can get a new
+  token, which it does first) are replaced by a new session with the options the client set, and
+  the loss is reported, not hidden: a warning, `conn.sessionReplacements`, and errors from work on
+  the replacement say so. The request that found the loss runs again on the replacement only when
+  the client knows no transaction was open in the lost session (§5.7): autocommit was on, the
+  server did not say `idle_in_transaction` (it ended the session and rolled its transaction back),
+  and no SQL that can begin a transaction (`BEGIN`, `START TRANSACTION`, anything naming
+  autocommit) ran there. Otherwise it fails, whether it was a statement (run alone in autocommit, it
+  would commit half a transaction) or a session request such as metadata (run again, it would hide
+  the loss from the statements that follow), and the next call runs on the replacement. A prepared
+  statement is prepared again, under the same condition. After `killed`, `credentials_changed`,
+  `principal_dropped`, `token_revoked` or a reason the client doesn't know, nothing is replaced:
+  the error carries the `reason`. With `reconnect: false` the connection stays broken.
 - **Cancel.** An aborted signal cancels the statement by id (`POST …/cancel`). When the answer with
   the id has not arrived, the client cancels the session's work if this is the connection's only
   statement, and otherwise learns the id by resending the request with its `Idempotency-Key`, which
@@ -491,7 +526,7 @@ which no test reached a server fails too.
 
 ```bash
 export CHARGEWIRE_JS_TEST_SERVER_BINARY=/path/to/chargewire-duckdb
-npm run test:live       # Node (vitest), 105 tests
+npm run test:live       # Node (vitest)
 npm run test:smoke      # Node, Deno, Bun and workerd (needs a build)
 npm run test:browser    # Chromium and WebKit (Playwright; needs a build)
 npm run test:browser:mtls  # certificate sign-in from a page on another origin (needs a build, and a

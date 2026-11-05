@@ -10,6 +10,7 @@ import {
   HttpClient,
   type Logger,
   type RequestBody,
+  type ResumingEvent,
   decodeJSON,
   defaultResumeTimeoutSeconds,
   jsonBody,
@@ -29,7 +30,7 @@ import {
   type SessionDocument,
   type TransactionState,
 } from "./protocol.js";
-import { Session, lostTransaction, sessionPath } from "./session.js";
+import { Session, sessionLostError, sessionPath } from "./session.js";
 import { Execution, type PreparedRef, maxResultPartitions, runRows, runUpdate } from "./statement.js";
 import { ResultStream } from "./stream.js";
 import { type SchemeMap, defaultSchemes, parseUrl } from "./url.js";
@@ -135,6 +136,13 @@ export interface ConnectOptions extends StatementOptions {
    * at once. Default 600.
    */
   resumeTimeout?: number;
+  /**
+   * Called each time the server answers `server_resuming` and the client is about to wait
+   * before sending the request again, so an application can say "the server is resuming"
+   * instead of looking frozen. Each request reports its own attempts. An exception it throws
+   * is ignored; the retries go on. To stop waiting, abort the call's (or connect's) `signal`.
+   */
+  onResuming?: (event: ResumingEvent) => void;
   /** Replace a session the server lost (§5.6). Default true. */
   reconnect?: boolean;
   /**
@@ -218,6 +226,9 @@ export async function connect(options: ConnectOptions): Promise<Connection> {
       ? options.logger.warn?.bind(options.logger)
       : (message, fields) => console.warn(`[chargewire] ${message}`, fields ?? ""),
   };
+  if (options.onResuming !== undefined && typeof options.onResuming !== "function") {
+    throw invalidArgument("onResuming must be a function");
+  }
   const resumeTimeout = options.resumeTimeout ?? defaultResumeTimeoutSeconds;
   if (typeof resumeTimeout !== "number" || !Number.isFinite(resumeTimeout) || resumeTimeout < 0) {
     throw invalidArgument("resumeTimeout must be a non-negative number of seconds");
@@ -228,6 +239,7 @@ export async function connect(options: ConnectOptions): Promise<Connection> {
     credentials,
     maxAttempts: options.maxAttempts ?? 4,
     resumeTimeoutMs: resumeTimeout * 1000,
+    onResuming: options.onResuming,
     userAgent: options.userAgent ?? (platform.name === "node" ? `chargewire-js/${version}` : undefined),
     logger,
     fetchCredentials:
@@ -278,7 +290,7 @@ export async function connect(options: ConnectOptions): Promise<Connection> {
   const sessionOptions: Record<string, unknown> = { ...options.sessionOptions };
   if (options.catalog !== undefined) sessionOptions["catalog"] = options.catalog;
   if (options.schema !== undefined) sessionOptions["schema"] = options.schema;
-  const session = await Session.open(http, sessionOptions, options.reconnect ?? true);
+  const session = await Session.open(http, sessionOptions, options.reconnect ?? true, options.signal);
   const core = new Core({ http, session, discovery, platform, settings, resultBufferBytes, discoveryRttMs });
   await core.resolveCodec(settings);
   return new Connection(core);
@@ -535,7 +547,7 @@ export class Connection {
         return prepared.runRows(params, settings, options.signal);
       }
       const body = submitBody(sql, params);
-      return runRows(new Execution(core, settings, body, undefined, options.signal));
+      return runRows(new Execution(core, settings, body, undefined, options.signal, sql));
     })();
     stream = new ResultStream(core, opening, {
       register,
@@ -566,7 +578,7 @@ export class Connection {
         void prepared.close();
       }
     }
-    return runUpdate(new Execution(this.#core, settings, submitBody(sql, params), undefined, options.signal));
+    return runUpdate(new Execution(this.#core, settings, submitBody(sql, params), undefined, options.signal, sql));
   }
 
   /** Prepares a statement on the server (§7). */
@@ -844,6 +856,7 @@ export class PreparedStatement {
         method: "DELETE",
         path: `${sessionPath(ref.sessionId)}/prepared/${encodeURIComponent(ref.preparedId)}`,
         idempotent: true,
+        resume: false, // a stopped server holds no prepared statements
       });
     } catch (err) {
       if (
@@ -852,6 +865,7 @@ export class PreparedStatement {
           ErrorCode.preparedNotFound,
           ErrorCode.sessionNotFound,
           ErrorCode.clientConnectionClosed,
+          ErrorCode.serverResuming,
         )
       )
         throw err;
@@ -902,15 +916,20 @@ export class PreparedStatement {
     const body = await this.#body(params);
     const ref = await this.#current(signal);
     try {
-      return await run(new Execution(this.#core, settings, body, ref, signal));
+      return await run(new Execution(this.#core, settings, body, ref, signal, this.sql));
     } catch (err) {
       const gone =
         ChargewireError.is(err, ErrorCode.preparedNotFound) ||
         (ChargewireError.is(err) && err.replacementSessionId !== undefined);
       if (!gone || body.stream !== undefined || this.#core.session.inTransaction || signal?.aborted) throw err;
-      if (ChargewireError.is(err) && lostTransaction(err)) throw err;
+      if (ChargewireError.is(err) && err.lostSessionId !== undefined) {
+        // §5.7: run it again on the replacement only when no transaction was open in the lost session.
+        const lost = this.#core.session.transactionLost(err.lostSessionId, err);
+        const cause = err.cause instanceof ChargewireError ? err.cause : err;
+        if (lost !== "") throw sessionLostError(cause, err.lostSessionId, err.replacementSessionId, lost);
+      }
       await this.#reprepare(signal);
-      return run(new Execution(this.#core, settings, body, this.#ref, signal));
+      return run(new Execution(this.#core, settings, body, this.#ref, signal, this.sql));
     }
   }
 
