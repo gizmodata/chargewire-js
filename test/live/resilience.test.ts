@@ -225,6 +225,24 @@ describe("lost sessions (§5.6)", () => {
     expect(await scalar(other, "SELECT count(*) FROM lost_begin")).toBe(1);
   });
 
+  test("after a SQL USE, a lost session's next statement fails rather than write to the default schema's table", async () => {
+    const conn = await open();
+    const other = await open();
+    await other.execute("CREATE SCHEMA IF NOT EXISTS lost_use_s");
+    await other.execute("CREATE OR REPLACE TABLE main.lost_use (v INTEGER)");
+    await other.execute("CREATE OR REPLACE TABLE lost_use_s.lost_use (v INTEGER)");
+    await conn.execute("USE lost_use_s");
+    await killSession(shared, conn.sessionId);
+    const err = await expectCode(conn.execute("INSERT INTO lost_use VALUES (1)"), ErrorCode.sessionNotFound);
+    expect(err.message).toContain("so this did not run again");
+    // Not in the schema the replacement starts in, and not anywhere else either.
+    expect(await scalar(other, "SELECT count(*) FROM main.lost_use")).toBe(0);
+    expect(await scalar(other, "SELECT count(*) FROM lost_use_s.lost_use")).toBe(0);
+    // Its twin: the next statement runs on the replacement, in its own default schema.
+    expect(await conn.execute("INSERT INTO lost_use VALUES (2)")).toBe(1);
+    expect(await scalar(other, "SELECT count(*) FROM main.lost_use")).toBe(1);
+  });
+
   test("commit of a lost transaction fails rather than pretending", async () => {
     const conn = await open();
     await conn.setAutocommit(false);
