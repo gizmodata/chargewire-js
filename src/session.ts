@@ -58,12 +58,29 @@ export function mayOpenTransaction(sql: string): boolean {
   return /\b(?:begin|start\s+transaction|autocommit)\b/i.test(sql);
 }
 
+/**
+ * Whether `sql` changes the session's state in a way a replacement session would not have:
+ * a statement whose first word is `USE`, `SET`, `RESET` or `PRAGMA` (its catalog and schema,
+ * its settings). The first word of the text and of every part after a `;` counts, comments
+ * skipped, so `UPDATE t SET ...` does not; a `;` inside a literal only makes it suspect more.
+ */
+export function changesSessionState(sql: string): boolean {
+  for (const part of sql.split(";")) {
+    const head = part.replace(/^(?:\s+|--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)*/u, "");
+    if (/^(?:use|set|reset|pragma)\b/iu.test(head)) return true;
+  }
+  return false;
+}
+
 const replacedNote = (oldId: string, newId: string): string =>
   ` (note: the server lost session ${oldId} and this ran in replacement session ${newId}, which has the ` +
   `connection's options but not the old session's temporary tables, SQL-level settings or prepared statements)`;
 
 /** `lost` for sessionLostError when a transaction may have been open, which the client can't tell. */
 export const maybeTransaction = "\u0000maybe-transaction";
+
+/** `lost` for sessionLostError when SQL changed the session's settings or search path (changesSessionState). */
+export const lostSessionState = "\u0000session-state";
 
 /** The error for an operation that could not run because its session is gone (§5.6). */
 export function sessionLostError(
@@ -77,6 +94,10 @@ export function sessionLostError(
     message +=
       "; SQL that can begin a transaction (BEGIN, START TRANSACTION, autocommit) ran in it, so a " +
       "transaction may have been open there and is gone, and this did not run again";
+  } else if (lost === lostSessionState) {
+    message +=
+      "; SQL that changes the session's settings (USE, SET, RESET or PRAGMA) ran in it, and those settings are " +
+      "gone with it (the replacement has only the connection's options), so this did not run again";
   } else if (lost !== "") message += `; the ${lost} that lived in it is gone`;
   message +=
     newId !== undefined
@@ -100,6 +121,10 @@ export class Session {
   #replacing: { failedId: string; promise: Promise<string> } | undefined;
   /** The sessions in which SQL ran that may have opened a transaction (mayOpenTransaction). */
   readonly #maybeTransactionIn = new Set<string>();
+  /** The sessions in which SQL ran that set a catalog or schema (`USE`), which setOptions can restore. */
+  readonly #searchPathIn = new Set<string>();
+  /** The sessions in which SQL ran that changed other session state (`SET`, `RESET`, `PRAGMA`). */
+  readonly #settingsIn = new Set<string>();
   /** The idle timeout the server announced. */
   idleTimeoutS: number | undefined;
 
@@ -148,16 +173,30 @@ export class Session {
   /** Records SQL sent to session `sessionId` (a statement, or a statement prepared there). */
   noteSql(sessionId: string, sql: string): void {
     if (mayOpenTransaction(sql)) this.#maybeTransactionIn.add(sessionId);
+    if (changesSessionState(sql)) {
+      // USE alone sets only the search path, which catalog and schema session options restore.
+      const onlyUse = sql
+        .split(";")
+        .map((part) => part.replace(/^(?:\s+|--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)*/u, ""))
+        .every((head) => !/^(?:set|reset|pragma)\b/iu.test(head));
+      (onlyUse ? this.#searchPathIn : this.#settingsIn).add(sessionId);
+    }
   }
 
   /**
-   * What may have been lost with session `sessionId`, besides temporary state: `open
-   * transaction` (autocommit is off, or the server said so), `maybeTransaction` (SQL that can
-   * begin one ran there), or `""` when the client knows no transaction was open (§5.7).
+   * What may have been lost with session `sessionId` that makes running a request again on a
+   * replacement unsafe: `open transaction` (autocommit is off, or the server said so),
+   * `maybeTransaction` (SQL that can begin one ran there, §5.7), `lostSessionState` (SQL changed
+   * its settings or search path, which the replacement does not have), or `""` when none of that.
+   * Decided from the SQL the client sent, never from a read of the session document, which a
+   * server before Chargewire 2.2.1 can answer before it has recorded a statement's effect.
    */
   transactionLost(sessionId: string, err: ChargewireError): string {
     if (this.inTransaction || lostTransaction(err)) return "open transaction";
     if (this.#maybeTransactionIn.has(sessionId)) return maybeTransaction;
+    // A replacement has the connection's options but not what SQL set: a request run again there
+    // could write to another schema's table, or run with other settings, without an error.
+    if (this.#settingsIn.has(sessionId) || this.#searchPathIn.has(sessionId)) return lostSessionState;
     return "";
   }
 
@@ -295,6 +334,10 @@ export class Session {
     for (const [key, value] of Object.entries(options)) {
       if (!Object.hasOwn(errors, key)) this.#options[key] = value;
     }
+    // Catalog and schema set as options now decide the search path, and a replacement gets them:
+    // a USE before this is restored.
+    const set = (key: string): boolean => Object.hasOwn(options, key) && !Object.hasOwn(errors, key);
+    if (set("catalog") && set("schema")) this.#searchPathIn.delete(this.#id);
     const refused = Object.keys(errors).sort();
     if (refused.length > 0) {
       const key = refused[0]!;

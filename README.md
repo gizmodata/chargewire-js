@@ -411,10 +411,14 @@ Statement options, per call or as `connect` defaults:
   the replacement say so. The request that found the loss runs again on the replacement only when
   the client knows no transaction was open in the lost session (§5.7): autocommit was on, the
   server did not say `idle_in_transaction` (it ended the session and rolled its transaction back),
-  and no SQL that can begin a transaction (`BEGIN`, `START TRANSACTION`, anything naming
-  autocommit) ran there. Otherwise it fails, whether it was a statement (run alone in autocommit, it
+  no SQL that can begin a transaction (`BEGIN`, `START TRANSACTION`, anything naming autocommit)
+  ran there, and no statement whose first word is `USE`, `SET`, `RESET` or `PRAGMA` did (the
+  replacement has the connection's options, not what SQL set: a re-run `INSERT INTO t` could land
+  in another schema's table). A `USE` followed by `setOptions` with both `catalog` and `schema`
+  counts as restored. Otherwise it fails, whether it was a statement (run alone in autocommit, it
   would commit half a transaction) or a session request such as metadata (run again, it would hide
-  the loss from the statements that follow), and the next call runs on the replacement. A prepared
+  the loss from the statements that follow), and the next call runs on the replacement. These
+  decisions come from the SQL the client sent, never from a read of the session document. A prepared
   statement is prepared again, under the same condition. After `killed`, `credentials_changed`,
   `principal_dropped`, `token_revoked` or a reason the client doesn't know, nothing is replaced:
   the error carries the `reason`. With `reconnect: false` the connection stays broken.

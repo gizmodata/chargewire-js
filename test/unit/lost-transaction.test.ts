@@ -7,7 +7,7 @@
 import { describe, expect, test } from "vitest";
 
 import { type Connection, ErrorCode, ChargewireError, connect } from "../../src/index.js";
-import { mayOpenTransaction } from "../../src/session.js";
+import { changesSessionState, mayOpenTransaction } from "../../src/session.js";
 import { FakeServer, json, problem } from "./fake.js";
 
 const quiet = { warn: () => {} };
@@ -190,6 +190,127 @@ describe("session_not_found and a transaction the client can't see (§5.7)", () 
     }
     for (const sql of ["SELECT 1", "SELECT begin_date FROM t", "INSERT INTO beginnings VALUES (1)", "SELECT started"]) {
       expect(mayOpenTransaction(sql), sql).toBe(false);
+    }
+  });
+});
+
+describe("session_not_found after SQL that changed the session's settings (USE, SET, RESET, PRAGMA)", () => {
+  test("after USE, the next statement fails on the replacement instead of writing to another schema's table", async () => {
+    const server = new FakeServer();
+    const { ranOnS2 } = losesSession(server, 1);
+    const conn = await open(server);
+    await conn.execute("USE lake.sales");
+    const err = await expectCode(conn.execute("INSERT INTO t VALUES (1)"), ErrorCode.sessionNotFound);
+    expect(err.replacementSessionId).toBe("s2");
+    expect(err.message).toContain("SQL that changes the session's settings (USE, SET, RESET or PRAGMA) ran in it");
+    expect(err.message).toContain("so this did not run again");
+    expect(ranOnS2).toEqual([]);
+    // The connection works again on the replacement.
+    expect(await conn.execute("INSERT INTO t VALUES (2)")).toBe(1);
+  });
+
+  test("its twin: UPDATE ... SET is not a SET statement, and the statement runs again on the replacement", async () => {
+    const server = new FakeServer();
+    const { ranOnS2 } = losesSession(server, 1);
+    const conn = await open(server);
+    await conn.execute("UPDATE t SET a = 1 -- USE in a comment after the first word");
+    expect(await conn.execute("INSERT INTO t VALUES (1)")).toBe(1);
+    expect(ranOnS2).toEqual(["INSERT INTO t VALUES (1)"]);
+  });
+
+  test("after SET, a query is not run again either", async () => {
+    const server = new FakeServer();
+    const { ranOnS2 } = losesSession(server, 1);
+    const conn = await open(server);
+    await conn.execute("/* tune */ SET threads = 1");
+    await expectCode(conn.query("SELECT 1"), ErrorCode.sessionNotFound);
+    expect(ranOnS2).toEqual([]);
+  });
+
+  test("a metadata request that finds the loss after USE fails too", async () => {
+    const server = new FakeServer();
+    losesSession(server, 1);
+    server.on("GET", /\/sessions\/s1\/metadata\/server-info$/, () => problem(404, "session_not_found"));
+    server.on("GET", /\/sessions\/s2\/metadata\/server-info$/, () => json(200, { server_name: "fake" }));
+    const conn = await open(server);
+    await conn.execute("USE other");
+    await expectCode(conn.metadata.serverInfo(), ErrorCode.sessionNotFound);
+    expect(await conn.metadata.serverInfo()).toEqual({ server_name: "fake" });
+  });
+
+  test("catalog and schema set as options after USE are restored on the replacement, so it runs again", async () => {
+    const server = new FakeServer();
+    const { ranOnS2 } = losesSession(server, 1);
+    server.on("PATCH", /\/sessions\/s1$/, () =>
+      json(200, { options: { catalog: "lake", schema: "sales" }, errors: {} }),
+    );
+    const conn = await open(server);
+    await conn.execute("USE lake.sales");
+    await conn.setOptions({ catalog: "lake", schema: "sales" });
+    expect(await conn.execute("INSERT INTO t VALUES (1)")).toBe(1);
+    expect(ranOnS2).toEqual(["INSERT INTO t VALUES (1)"]);
+    // The replacement was opened with them.
+    const create = server.requests
+      .filter((r) => r.method === "POST" && r.url.pathname.endsWith("/v1/sessions"))
+      .at(-1)!;
+    expect(JSON.parse(create.body)).toEqual({ options: { catalog: "lake", schema: "sales" } });
+  });
+
+  test("but options do not restore a SET: after SET and options, it still does not run again", async () => {
+    const server = new FakeServer();
+    const { ranOnS2 } = losesSession(server, 1);
+    server.on("PATCH", /\/sessions\/s1$/, () =>
+      json(200, { options: { catalog: "lake", schema: "sales" }, errors: {} }),
+    );
+    const conn = await open(server);
+    await conn.execute("SET search_path = 'lake.sales'");
+    await conn.setOptions({ catalog: "lake", schema: "sales" });
+    await expectCode(conn.execute("INSERT INTO t VALUES (1)"), ErrorCode.sessionNotFound);
+    expect(ranOnS2).toEqual([]);
+  });
+
+  test("a prepared statement is not prepared again and run after SET ran in the lost session", async () => {
+    const server = new FakeServer();
+    losesSession(server, 1);
+    server.on("POST", /\/prepared$/, () => json(201, { prepared_id: "p1", parameter_schema: null }));
+    server.on("POST", /\/sessions\/s1\/prepared\/p1\/execute$/, () => problem(404, "session_not_found"));
+    let ranOnS2 = 0;
+    server.on("POST", /\/sessions\/s2\/prepared\/p1\/execute$/, () => {
+      ranOnS2++;
+      return done(1);
+    });
+    const conn = await open(server);
+    const q = await conn.prepare("INSERT INTO t VALUES (?)");
+    await conn.execute("RESET threads");
+    const err = await expectCode(q.execute([1]), ErrorCode.sessionNotFound);
+    expect(err.message).toContain("so this did not run again");
+    expect(ranOnS2).toBe(0);
+  });
+
+  test("which SQL changes the session's settings: the first word of each statement", () => {
+    for (const sql of [
+      "USE lake",
+      "use lake.sales",
+      "SET threads = 4",
+      "  set\nthreads = 4",
+      "RESET threads",
+      "PRAGMA enable_progress_bar",
+      "-- tune\nSET threads = 4",
+      "/* a */ /* b */ USE x",
+      "SELECT 1; USE x",
+      "SELECT 'a; set x'", // a ; in a literal: suspected, the safe way
+    ]) {
+      expect(changesSessionState(sql), sql).toBe(true);
+    }
+    for (const sql of [
+      "SELECT 1",
+      "UPDATE t SET a = 1",
+      "INSERT INTO settings VALUES (1)",
+      "SELECT * FROM users",
+      "SELECT reset_at FROM t",
+      "WITH s AS (SELECT 1) SELECT * FROM s",
+    ]) {
+      expect(changesSessionState(sql), sql).toBe(false);
     }
   });
 });

@@ -6,6 +6,29 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [2.2.1] - 2026-11-05
+
+### Fixed
+
+- A request that finds its session lost no longer runs again on the replacement after the lost
+  session ran a statement whose first word is `USE`, `SET`, `RESET` or `PRAGMA`. The replacement
+  has the connection's options but not what SQL set, so an `INSERT INTO t` run again after a SQL
+  `USE other_schema` wrote to the default schema's table, and other statements ran with other
+  settings, without an error. It now fails with the lost-session error, saying that the settings
+  and `USE` of the old session are gone and that it did not run again; the next call runs on the
+  replacement. Only the first word of each statement counts (`UPDATE t SET ...` does not). Catalog
+  and schema set through `connect` or `setOptions` are restored on the replacement, so they don't
+  count, and a `USE` followed by `setOptions` with both `catalog` and `schema` counts as restored.
+  The rule applies to statements, session requests and prepared statements alike, as 2.2.0's
+  transaction rule does.
+
+### Changed
+
+- `getSession()` documents that a server before Chargewire 2.2.1 can answer a statement without rows
+  on the streamed path before recording its effect, so a read right after a `USE` or `BEGIN` run
+  that way can be stale. The client itself never decides anything from such a read: its rules for
+  lost sessions read the SQL it sent.
+
 ## [2.2.0] - 2026-11-05
 
 ### Added

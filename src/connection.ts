@@ -645,7 +645,10 @@ export class Connection {
 
   /**
    * The session document (§5.2), with the session's current options (a `USE` shows here) and its
-   * transaction (a SQL `BEGIN` shows here too, once the statement has ended).
+   * transaction (a SQL `BEGIN` shows here too, once the statement has ended). A server before
+   * Chargewire 2.2.1 may answer a statement without rows on the streamed path (`query`, `stream`)
+   * before it has recorded the statement's effect, so a read right after a `USE` or `BEGIN` run
+   * that way can still show the state before it. `execute` waits for the statement to end.
    */
   async getSession(options: { signal?: AbortSignal } = {}): Promise<SessionDocument> {
     await this.#before();
