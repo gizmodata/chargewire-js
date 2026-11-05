@@ -100,9 +100,26 @@ export type KnownErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
 /**
  * Why a session ended (§5.6), on `session_ended` errors. Later versions may add reasons
  * (§12): treat one this list lacks as a generic "the session is gone".
+ *
+ * - `killed`: an administrator ended it (e.g. SQL `KILL SESSION`).
+ * - `credentials_changed`: the principal's password or credentials changed, or something else
+ *   the server ties the session's rights to.
+ * - `principal_dropped`: the principal was dropped or disabled.
+ * - `token_revoked`: the token the session was opened with was revoked.
+ * - `token_expired`: the token the session was opened with expired, and the session could do
+ *   nothing more without it (for example a scoped token's session).
+ * - `idle_in_transaction`: the session held a transaction open with nothing running and no
+ *   request for `idle_in_transaction_timeout_s`, or was evicted as idle (`idle_timeout_s`)
+ *   while it held one (§5.7); the server ended it and rolled the transaction back.
  */
 export type SessionEndedReason =
-  "killed" | "credentials_changed" | "principal_dropped" | "token_revoked" | "token_expired" | (string & {});
+  | "killed"
+  | "credentials_changed"
+  | "principal_dropped"
+  | "token_revoked"
+  | "token_expired"
+  | "idle_in_transaction"
+  | (string & {});
 
 /**
  * Why the server refused an authentic token (§4.2), on `invalid_token` errors. Absent for a

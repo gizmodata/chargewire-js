@@ -2,8 +2,8 @@
 
 import { describe, expect, test } from "vitest";
 
-import { ErrorCode } from "../../src/index.js";
-import { expectCode, open, scalar, within } from "./helpers.js";
+import { ErrorCode, type SessionEndedReason } from "../../src/index.js";
+import { expectCode, open, scalar, sleep, within } from "./helpers.js";
 
 describe("transactions (§5.5)", () => {
   test("transaction() commits when the work resolves", async () => {
@@ -76,6 +76,42 @@ describe("the session's transaction (§5.2)", () => {
     expect(await conn.transactionState()).toBe("open");
     await conn.query("COMMIT");
     expect(await conn.transactionState()).toBe("none");
+  });
+});
+
+describe("a transaction left idle (§5.6, §5.7)", () => {
+  test("session_ended idle_in_transaction: the statement fails, never runs again, and the session is replaced", async () => {
+    const conn = await open();
+    const watcher = await open();
+    await conn.execute("CREATE OR REPLACE TABLE tx_idle (v INTEGER)");
+    expect((await conn.getSession()).idle_in_transaction_timeout_s).toBe(0);
+    await conn.execute("SET hardcharger.idle_in_transaction_session_timeout = 1");
+    expect((await conn.getSession()).idle_in_transaction_timeout_s).toBe(1);
+    // BEGIN in SQL: the client doesn't track it, so only the reason says a transaction was lost.
+    await conn.execute("BEGIN");
+    await conn.execute("INSERT INTO tx_idle VALUES (1)");
+    const lost = conn.sessionId;
+    // The server ends it within 5 s after the limit. Watch from another session: a request on
+    // this one would keep it alive.
+    const deadline = Date.now() + 30_000;
+    while ((await scalar(watcher, `SELECT count(*) FROM hardcharger_sessions() WHERE session_id = '${lost}'`)) > 0) {
+      expect(Date.now(), "the server did not end the idle transaction's session").toBeLessThan(deadline);
+      await sleep(250);
+    }
+    const err = await expectCode(conn.execute("INSERT INTO tx_idle VALUES (2)"), ErrorCode.sessionEnded);
+    // The type names the reason, so code can narrow on it.
+    const reason: SessionEndedReason | undefined = err.reason;
+    expect(reason).toBe("idle_in_transaction" satisfies SessionEndedReason);
+    expect(err.lostSessionId).toBe(lost);
+    expect(err.replacementSessionId).toBe(conn.sessionId);
+    expect(conn.sessionId).not.toBe(lost);
+    expect(conn.sessionReplacements).toBe(1);
+    // Neither insert happened: the first was rolled back, the second never ran again in autocommit.
+    expect(await scalar(watcher, "SELECT count(*) FROM tx_idle")).toBe(0);
+    // The connection is usable again, on the replacement, with no transaction open.
+    expect(await conn.transactionState()).toBe("none");
+    expect(await conn.execute("INSERT INTO tx_idle VALUES (3)")).toBe(1);
+    expect(await scalar(watcher, "SELECT count(*) FROM tx_idle")).toBe(1);
   });
 });
 

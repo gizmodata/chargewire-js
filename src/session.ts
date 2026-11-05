@@ -24,9 +24,9 @@ export function sessionPath(id: string): string {
 
 /**
  * Whether `err` says the session is gone in a way a new session cures (§5.6): the server
- * doesn't have it (`session_not_found`), ended it because its transaction sat idle past the
- * server's limit (`idle_in_transaction`: the transaction was rolled back, a new session is
- * as good as the old one was), or ended it because its token expired and the client can get
+ * doesn't have it (`session_not_found`), ended it while it held a transaction open, idle past
+ * the server's idle-in-transaction limit or evicted as idle (`idle_in_transaction`: the
+ * transaction was rolled back, a new session is as good as the old one was), or ended it because its token expired and the client can get
  * a new token (`canRenew`), which it must before opening a new session. After
  * `credentials_changed`, `principal_dropped` or `token_revoked` the client may not sign in
  * again on its own (§4.2), and an administrator's `killed` (or a reason the client doesn't
