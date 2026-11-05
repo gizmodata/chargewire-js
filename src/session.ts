@@ -98,8 +98,8 @@ export class Session {
   #replacements = 0;
   #closed = false;
   #replacing: { failedId: string; promise: Promise<string> } | undefined;
-  /** The session in which SQL ran that may have opened a transaction (mayOpenTransaction). */
-  #maybeTransactionIn: string | undefined;
+  /** The sessions in which SQL ran that may have opened a transaction (mayOpenTransaction). */
+  readonly #maybeTransactionIn = new Set<string>();
   /** The idle timeout the server announced. */
   idleTimeoutS: number | undefined;
 
@@ -147,7 +147,7 @@ export class Session {
 
   /** Records SQL sent to session `sessionId` (a statement, or a statement prepared there). */
   noteSql(sessionId: string, sql: string): void {
-    if (mayOpenTransaction(sql)) this.#maybeTransactionIn = sessionId;
+    if (mayOpenTransaction(sql)) this.#maybeTransactionIn.add(sessionId);
   }
 
   /**
@@ -157,7 +157,7 @@ export class Session {
    */
   transactionLost(sessionId: string, err: ChargewireError): string {
     if (this.inTransaction || lostTransaction(err)) return "open transaction";
-    if (this.#maybeTransactionIn === sessionId) return maybeTransaction;
+    if (this.#maybeTransactionIn.has(sessionId)) return maybeTransaction;
     return "";
   }
 
