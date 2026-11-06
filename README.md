@@ -560,6 +560,25 @@ without an OpenSSL session id context, so a resumed TLS session fails ("tlsv1 al
 error") whenever mutual TLS is on. Node clients resume sessions by default, so every connection after
 the first would fail. With a client certificate, this client turns session resumption off.
 
+## Query progress and execution details
+
+Pass `onProgress` to a query, stream, or update call to observe statement status while it runs:
+
+```ts
+const rows = connection.stream("SELECT * FROM large_table", undefined, {
+  onProgress: (statement) => console.log(statement.state, statement.progress?.fraction),
+});
+const statement = await rows.statement();
+for await (const batch of rows) {
+  // Consume each batch as it arrives.
+}
+```
+
+Progress is optional and estimated. Observation uses bounded status requests and stops when
+results close; callback exceptions do not fail SQL. Explicit retention and async settings are
+preserved. `statement()` reads the current document while the stream is open and returns the
+last observed snapshot after release, without rerunning SQL or retaining results.
+
 ## 📦 Releasing
 
 Releases are tags: update `CHANGELOG.md` and the version in `package.json`, commit, and push

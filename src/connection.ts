@@ -28,6 +28,7 @@ import {
   type DiscoveryDocument,
   type PreparedDocument,
   type SessionDocument,
+  type StatementDocument,
   type TransactionState,
 } from "./protocol.js";
 import { Session, sessionLostError, sessionPath } from "./session.js";
@@ -38,6 +39,9 @@ import { version } from "./version.js";
 
 /** How a statement runs. Set on `connect` as defaults, or per call. */
 export interface StatementOptions {
+  /** Live statement status (including progress), about every 250 ms.
+   * Exceptions are ignored; cancellation and result streaming keep their normal behavior. */
+  onProgress?: (statement: StatementDocument) => void;
   /**
    * Submit, long-poll, then fetch a retained result (§6.1, §6.3), instead of streaming the
    * result in the submit's answer. No request stays open for a whole query, and a broken
@@ -426,6 +430,7 @@ function defaultsFrom(options: ConnectOptions): StatementSettings {
 /** Merges per-call options over the defaults, refusing bad values before anything is sent. */
 function resolveSettings(defaults: StatementSettings, options: StatementOptions): StatementSettings {
   const s = { ...defaults };
+  if (options.onProgress !== undefined) s.onProgress = options.onProgress;
   if (options.async !== undefined) s.async = options.async;
   if (options.retainResult !== undefined) s.retainResult = options.retainResult;
   if (options.statementTimeoutMs !== undefined) {

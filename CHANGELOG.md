@@ -6,6 +6,13 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-11-06
+
+### Added
+
+- Optional `onProgress` callbacks observe statement execution while results stream, without forcing retention. Observer failures do not fail SQL; requests stop when results close.
+- `ResultStream.statement()` reads the current statement document and preserves the last observed snapshot after release.
+
 ## [2.2.1] - 2026-11-05
 
 ### Fixed

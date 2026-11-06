@@ -4,11 +4,12 @@ import { type IpcCodec, type IpcCompression, chooseCodec, enableCodec, farLinkMs
 import { ErrorCode, ChargewireError } from "./errors.js";
 import { type HttpClient, type Logger, discard } from "./http.js";
 import type { Platform } from "./platform/types.js";
-import type { DiscoveryDocument } from "./protocol.js";
+import type { StatementDocument, DiscoveryDocument } from "./protocol.js";
 import type { Session } from "./session.js";
 
 /** How statements run unless a call says otherwise. */
 export interface StatementSettings {
+  onProgress?: (statement: StatementDocument) => void;
   /** Submit, poll, then read a retained, resumable result (§6.1, §6.3). */
   async: boolean;
   /** Ask the server to keep (or not keep) results for re-reading and resuming (§6.5); undefined: server's choice. */
