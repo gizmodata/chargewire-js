@@ -702,3 +702,128 @@ describe("capabilities (§3.1)", () => {
     expect(server.count("POST", /\/ingest$/)).toBe(0);
   });
 });
+
+describe("statement documents on result streams", () => {
+  test("reads streamed progress through status, and keeps the snapshot after release", async () => {
+    const server = new FakeServer();
+    const progress = { fraction: 0.5 };
+    server.on("POST", /\/statements$/, () =>
+      arrow(tableFromArrays({ answer: [42] }), { "chargewire-statement-id": "q1" }),
+    );
+    server.on("GET", /\/statements\/q1$/, () => json(200, { ...doneDoc("q1", { kind: "rows" }), progress }));
+    server.on("DELETE", /\/statements\/q1$/, () => new Response(null, { status: 204 }));
+    const conn = await open(server);
+    const stream = conn.stream("SELECT 42");
+    expect((await stream.statement())?.progress).toEqual(progress);
+    expect((await stream.toTable()).numRows).toBe(1);
+    const requests = server.requests.length;
+    expect((await stream.statement())?.progress).toEqual(progress);
+    expect(server.requests).toHaveLength(requests);
+    expect(server.requests.filter((r) => r.method === "POST" && r.url.pathname.endsWith("/statements"))).toHaveLength(
+      1,
+    );
+    await conn.close();
+  });
+
+  test("a failed metadata read leaves row streaming usable", async () => {
+    const server = new FakeServer();
+    server.on("POST", /\/statements$/, () =>
+      arrow(tableFromArrays({ answer: [42] }), { "chargewire-statement-id": "q1" }),
+    );
+    server.on("GET", /\/statements\/q1$/, () => problem(403, "permission_denied"));
+    const conn = await open(server);
+    const stream = conn.stream("SELECT 42");
+    await expect(stream.statement()).rejects.toBeInstanceOf(ChargewireError);
+    expect((await stream.toTable()).numRows).toBe(1);
+    expect(await stream.statement()).toBeUndefined();
+    await conn.close();
+  });
+
+  test("a consumed Arrow response without a snapshot is unknown, not local", async () => {
+    const server = new FakeServer();
+    server.on("POST", /\/statements$/, () =>
+      arrow(tableFromArrays({ answer: [42] }), { "chargewire-statement-id": "q1" }),
+    );
+    const conn = await open(server);
+    const stream = conn.stream("SELECT 42");
+    await stream.toTable();
+    expect(await stream.statement()).toBeUndefined();
+    expect(server.requests.some((r) => r.method === "GET" && r.url.pathname.endsWith("/statements/q1"))).toBe(false);
+    await conn.close();
+  });
+
+  test("JSON update and async row responses preserve their document without another status request", async () => {
+    for (const kind of ["update", "rows"]) {
+      const server = new FakeServer();
+      const doc = doneDoc(
+        "q1",
+        kind === "update" ? { kind, rows_affected: 3 } : { kind, partitions: [{ index: 0 }], retained: true },
+      );
+      server.on("POST", /\/statements$/, () => json(200, doc));
+      server.on("GET", /\/statements\/q1\/result$/, () => arrow(tableFromArrays({ answer: [42] })));
+      const conn = await open(server, { async: true });
+      const stream = conn.stream("query");
+      await stream.toTable();
+      expect(await stream.statement()).toEqual(doc);
+      expect(server.requests.some((r) => r.method === "GET" && r.url.pathname.endsWith("/statements/q1"))).toBe(false);
+      await conn.close();
+    }
+  });
+});
+
+describe("live progress", () => {
+  test("observes execution before rows exist, streams a running result, and stops on close", async () => {
+    const server = new FakeServer();
+    let polls = 0;
+    const seen: number[] = [];
+    server.on("POST", /\/statements$/, (req) => {
+      expect(req.headers.get("prefer")).toBe("respond-async");
+      expect(req.headers.get("chargewire-retain-result")).toBe("false");
+      return json(201, { statement_id: "q1", state: "running", result: null, progress: { fraction: 0.1 } });
+    });
+    server.on("GET", /\/statements\/q1$/, () => {
+      polls++;
+      return json(200, {
+        statement_id: "q1",
+        state: "running",
+        progress: { fraction: 0.5 },
+        result: { kind: "rows", partitions: [{ index: 0, location: null }], retained: false },
+      });
+    });
+    server.on("GET", /\/statements\/q1\/result$/, () => arrow(tableFromArrays({ answer: [42] })));
+    server.on("DELETE", /\/statements\/q1$/, () => new Response(null, { status: 204 }));
+    const conn = await open(server);
+    const stream = conn.stream("SELECT 42", undefined, {
+      onProgress: (doc) => {
+        seen.push(doc.progress?.fraction ?? -1);
+        throw new Error("observer failure");
+      },
+    });
+    expect((await stream.toTable()).numRows).toBe(1);
+    expect(seen).toContain(0.1);
+    expect(seen).toContain(0.5);
+    const ended = polls;
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    expect(polls).toBe(ended);
+    await conn.close();
+  });
+});
+
+test("execute progress reports before an update finishes without forcing unretained results", async () => {
+  const server = new FakeServer();
+  const states: string[] = [];
+  server.on("POST", /\/statements$/, (req) => {
+    expect(req.headers.get("prefer")).toBe("respond-async");
+    expect(req.headers.get("chargewire-retain-result")).toBeNull();
+    return json(201, { statement_id: "q1", state: "running", result: null });
+  });
+  server.on("GET", /\/statements\/q1$/, () => json(200, doneDoc("q1", { kind: "update", rows_affected: 3 })));
+  const conn = await open(server);
+  expect(
+    await conn.execute("INSERT INTO t VALUES (1), (2), (3)", undefined, {
+      onProgress: (doc) => states.push(doc.state),
+    }),
+  ).toBe(3);
+  expect(states).toEqual(["running", "succeeded"]);
+  await conn.close();
+});

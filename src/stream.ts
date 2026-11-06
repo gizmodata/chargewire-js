@@ -5,6 +5,7 @@ import { type RecordBatch, type Schema, Table } from "apache-arrow";
 import type { Core, OpenStream } from "./core.js";
 import { ErrorCode, ChargewireError } from "./errors.js";
 import { batchBytes } from "./ipc.js";
+import type { StatementDocument } from "./protocol.js";
 import type { Rows } from "./statement.js";
 
 /**
@@ -59,6 +60,17 @@ export class ResultStream implements AsyncIterableIterator<RecordBatch, undefine
   /** The statement's id on the server, once known. */
   get statementId(): string | undefined {
     return this.#rows?.statementId;
+  }
+
+  /**
+   * The standard statement document, including query progress (§6.2).
+   * While the result is open, reads its current document over HTTP. After it is closed or
+   * exhausted, returns the last observed snapshot, or undefined if none was read. Read this
+   * before consuming an Arrow response if metadata is needed after release; it does not
+   * retain the result or issue SQL. A snapshot may precede completion of a streamed query.
+   */
+  async statement(): Promise<StatementDocument | undefined> {
+    return (await this.#opening).statement();
   }
 
   /** For a statement without rows (DDL, DML): the rows it changed, or null when the engine does not count. */

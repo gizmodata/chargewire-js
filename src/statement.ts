@@ -79,6 +79,8 @@ export class Execution {
   readonly #userSignal: AbortSignal | undefined;
   readonly #onAbort: (() => void) | undefined;
   #finished = false;
+  readonly #progressStop = new AbortController();
+  document: StatementDocument | undefined;
   #freed = false;
   #stopping: Promise<void> | undefined;
 
@@ -136,12 +138,17 @@ export class Execution {
     return `${sessionPath(sessionId)}/statements`;
   }
 
-  #request(sessionId: string, mode: { arrow: boolean; async: boolean }, signal: AbortSignal): HttpRequest {
+  #request(
+    sessionId: string,
+    mode: { arrow: boolean; async: boolean; streaming?: boolean },
+    signal: AbortSignal,
+  ): HttpRequest {
     const s = this.settings;
     const headers: Record<string, string> = { "Idempotency-Key": this.key };
     if (mode.arrow) headers["Accept"] = mediaTypeArrow;
     if (mode.async) headers["Prefer"] = "respond-async";
     else if (!mode.arrow) headers["Prefer"] = `wait=${longPollS}`;
+    if (mode.streaming && !s.async && s.onProgress) headers["Chargewire-Retain-Result"] = "false";
     if (s.retainResult !== undefined) headers["Chargewire-Retain-Result"] = String(s.retainResult);
     if (s.statementTimeoutMs !== undefined && s.statementTimeoutMs > 0) {
       headers["Chargewire-Statement-Timeout"] = String(Math.max(1, Math.round(s.statementTimeoutMs)));
@@ -172,7 +179,7 @@ export class Execution {
   }
 
   /** Sends the submission. The answer is an Arrow stream (streamed path) or a statement document. */
-  async submit(mode: { arrow: boolean; async: boolean }): Promise<Response> {
+  async submit(mode: { arrow: boolean; async: boolean; streaming?: boolean }): Promise<Response> {
     const session = this.core.session;
     if (this.prepared !== undefined) {
       this.sessionId = this.prepared.sessionId;
@@ -221,18 +228,54 @@ export class Execution {
       idempotent: true,
       signal,
     });
-    return decodeStatement(resp);
+    return (this.document = await decodeStatement(resp));
+  }
+
+  /** Reads live metadata while owned; after release, returns the last observed snapshot. */
+  async details(): Promise<StatementDocument | undefined> {
+    if (this.#finished || this.statementId === undefined) return this.document;
+    return this.status(0);
+  }
+
+  report(doc: StatementDocument): void {
+    if (this.#finished || this.signal.aborted) return;
+    try {
+      this.settings.onProgress?.(doc);
+    } catch {
+      /* Observers cannot fail SQL. */
+    }
+  }
+
+  /** Bounded, non-overlapping observation alongside the Arrow reader. */
+  watchProgress(): void {
+    if (!this.settings.onProgress) return;
+    const signal = AbortSignal.any([this.signal, this.#progressStop.signal]);
+    void (async () => {
+      while (!signal.aborted) {
+        await sleep(250, signal);
+        try {
+          const doc = await this.status(0, AbortSignal.any([signal, AbortSignal.timeout(1500)]));
+          if (signal.aborted) return;
+          this.report(doc);
+          if (isTerminal(doc.state)) return;
+        } catch {
+          if (signal.aborted) return;
+        }
+      }
+    })().catch(() => {});
   }
 
   /** Waits until the statement reaches a final state. */
   async waitDone(doc: StatementDocument): Promise<StatementDocument> {
     let pause = 50;
+    this.report(doc);
     while (!isTerminal(doc.state)) {
-      if (!this.core.has(Capability.longPoll)) {
+      if (this.settings.onProgress || !this.core.has(Capability.longPoll)) {
         await sleep(pause, this.signal);
         pause = Math.min(pause * 2, 1000);
       }
-      doc = await this.status(longPollS);
+      doc = await this.status(this.settings.onProgress ? 0 : longPollS);
+      this.report(doc);
     }
     return doc;
   }
@@ -359,6 +402,7 @@ export class Execution {
   finish(): void {
     if (this.#finished) return;
     this.#finished = true;
+    this.#progressStop.abort();
     this.core.running--;
     if (this.#onAbort !== undefined) this.#userSignal?.removeEventListener("abort", this.#onAbort);
     this.free();
@@ -399,6 +443,7 @@ export async function decodeStatement(resp: Response): Promise<StatementDocument
 /** A finished run's rows (or its update count), as a source of batches. */
 export interface Rows {
   readonly source: BatchSource;
+  readonly statement: () => Promise<StatementDocument | undefined>;
   readonly statementId: string | undefined;
   /** For a statement without rows: the rows it changed (null when the engine does not count). */
   readonly rowsAffected: number | null | undefined;
@@ -409,11 +454,30 @@ export interface Rows {
 /** Runs a statement for its rows. The caller reads `source` to its end or closes it. */
 export async function runRows(exec: Execution): Promise<Rows> {
   try {
+    if (exec.settings.onProgress && !exec.settings.async) {
+      const resp = await exec.submit({ arrow: false, async: true, streaming: true });
+      let doc = await decodeStatement(resp);
+      exec.statementId = doc.statement_id;
+      exec.report(doc);
+      let pause = 25;
+      // Start reading once the partition layout is known, not after all rows have
+      // been produced: an unretained result is bounded and needs an active reader.
+      while (!isTerminal(doc.state) && !(doc.result?.kind === "rows" && doc.result.partitions?.length)) {
+        await sleep(pause, exec.signal);
+        pause = Math.min(250, pause * 2);
+        doc = await exec.status(0);
+        exec.report(doc);
+      }
+      exec.watchProgress();
+      return await fromDocument(exec, doc);
+    }
     if (exec.settings.async) {
       const resp = await exec.submit({ arrow: false, async: true });
       const doc = await decodeStatement(resp);
       exec.statementId = doc.statement_id;
-      return await fromDocument(exec, await exec.waitDone(doc));
+      const finished = await exec.waitDone(doc);
+      exec.watchProgress();
+      return await fromDocument(exec, finished);
     }
     const resp = await exec.submit({ arrow: true, async: false });
     if (!isArrowResponse(resp)) {
@@ -436,6 +500,7 @@ export async function runRows(exec: Execution): Promise<Rows> {
       await reader.open();
       return {
         source: ending(exec, reader),
+        statement: () => exec.details(),
         statementId: exec.statementId,
         rowsAffected: undefined,
         partitions: split.k,
@@ -443,7 +508,13 @@ export async function runRows(exec: Execution): Promise<Rows> {
     }
     const reader = new PartReader(exec, 0, undefined, exec.signal, resp);
     await reader.open();
-    return { source: ending(exec, reader), statementId: exec.statementId, rowsAffected: undefined, partitions: 1 };
+    return {
+      source: ending(exec, reader),
+      statement: () => exec.details(),
+      statementId: exec.statementId,
+      rowsAffected: undefined,
+      partitions: 1,
+    };
   } catch (err) {
     throw exec.fail(err);
   }
@@ -477,14 +548,21 @@ async function splitHeaders(resp: Response): Promise<{ k: number; order: "interl
 
 /** Turns a finished statement into its rows or its count. */
 async function fromDocument(exec: Execution, doc: StatementDocument): Promise<Rows> {
-  if (doc.state !== "succeeded") throw statementError(doc);
+  exec.document = doc;
+  if (doc.state !== "succeeded" && !(doc.state === "running" && doc.result?.kind === "rows")) throw statementError(doc);
   const result = doc.result;
   if (result === undefined || result === null)
     throw protocolError(`statement ${doc.statement_id} succeeded without a result`);
   if (result.kind === "update") {
     exec.finish();
     const affected = typeof result.rows_affected === "number" ? result.rows_affected : null;
-    return { source: emptySource(), statementId: doc.statement_id, rowsAffected: affected, partitions: 0 };
+    return {
+      source: emptySource(),
+      statement: () => exec.details(),
+      statementId: doc.statement_id,
+      rowsAffected: affected,
+      partitions: 0,
+    };
   }
   if (result.kind !== "rows") {
     // A new kind reaches only a client that asked for it (§12).
@@ -496,7 +574,13 @@ async function fromDocument(exec: Execution, doc: StatementDocument): Promise<Ro
   if (partitions.length === 1) {
     const reader = new PartReader(exec, partitions[0]!.index, locations[0], exec.signal);
     await reader.open();
-    return { source: ending(exec, reader), statementId: doc.statement_id, rowsAffected: undefined, partitions: 1 };
+    return {
+      source: ending(exec, reader),
+      statement: () => exec.details(),
+      statementId: doc.statement_id,
+      rowsAffected: undefined,
+      partitions: 1,
+    };
   }
   // More than one partition: the result says how its rows are spread (§6.10), and every
   // partition, on this server or another, is read at once.
@@ -516,6 +600,7 @@ async function fromDocument(exec: Execution, doc: StatementDocument): Promise<Ro
   await reader.open();
   return {
     source: ending(exec, reader),
+    statement: () => exec.details(),
     statementId: doc.statement_id,
     rowsAffected: undefined,
     partitions: parts.length,
@@ -565,7 +650,16 @@ function ending(exec: Execution, source: BatchSource): BatchSource {
     async next() {
       try {
         const result = await source.next();
-        if (result.done) end();
+        if (result.done) {
+          if (exec.settings.onProgress) {
+            try {
+              exec.report(await exec.status(0, AbortSignal.any([exec.signal, AbortSignal.timeout(1500)])));
+            } catch {
+              /* best effort */
+            }
+          }
+          end();
+        }
         return result;
       } catch (err) {
         const reported = exec.cancelled ? exec.cancelledError() : err;
@@ -584,7 +678,7 @@ function ending(exec: Execution, source: BatchSource): BatchSource {
 /** Runs a statement for its update count (§6.1, status-document path). */
 export async function runUpdate(exec: Execution): Promise<number | null> {
   try {
-    const resp = await exec.submit({ arrow: false, async: exec.settings.async });
+    const resp = await exec.submit({ arrow: false, async: exec.settings.async || !!exec.settings.onProgress });
     if (isArrowResponse(resp)) {
       await discard(resp);
       throw protocolError("the server answered a statement-document request with an Arrow stream");
