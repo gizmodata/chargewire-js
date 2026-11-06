@@ -95,6 +95,14 @@ export interface HttpRequest {
    * server holds no statements, sessions or results). Default true.
    */
   resume?: boolean;
+  /**
+   * `false`: sent with the token the client has, even one due for renewal, and never a reason
+   * to sign in, before it or after an `invalid_token` answer. For closes and cancels: what they
+   * end lives only as long as the client's sign-in does, so without a valid token there is
+   * nothing left to end, and a sign-in would start a stopped server for nobody (§11.2).
+   * Default true.
+   */
+  renew?: boolean;
   /** Called when the server did not take the request (`server_resuming`, or `invalid_token` before a renewal). */
   onNotTaken?: () => void;
 }
@@ -294,7 +302,8 @@ export class HttpClient {
    * sent once more with a fresh token (the server refused it before running it), unless
    * the refusal's reason says signing in again cannot help or must not happen on its own
    * (`token_revoked`, `credentials_changed`, `principal_dropped`, §4.2): that refusal is
-   * the error, with its reason.
+   * the error, with its reason. A request with `renew` false (closes, cancels) is never sent
+   * again for a token: its `invalid_token` is the error at once.
    */
   async request(req: HttpRequest): Promise<Response> {
     if (!this.#open) return this.#request(req);
@@ -344,7 +353,11 @@ export class HttpClient {
     let resumeStart: number | undefined; // set by the first server_resuming answer
     let resumeAttempts = 0;
     for (let attempt = 1; ; attempt++) {
-      const token = req.anonymous ? undefined : await this.accessToken(req.signal, req.resume !== false);
+      const token = req.anonymous
+        ? undefined
+        : req.renew === false
+          ? this.#token
+          : await this.accessToken(req.signal, req.resume !== false);
       const canRepeat = replayable(req.body) && attempt < this.#maxAttempts;
       let resp: Response;
       try {
@@ -411,6 +424,7 @@ export class HttpClient {
         tokenRenewable(problem.reason) &&
         !renewed &&
         !req.anonymous &&
+        req.renew !== false &&
         this.canRenew &&
         replayable(req.body)
       ) {

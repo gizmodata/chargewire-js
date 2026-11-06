@@ -203,9 +203,10 @@ export class Execution {
       doc = await this.core.http.json<StatementDocument>({
         ...this.#request(this.sessionId, { arrow: false, async: true }, signal),
         resume: false,
+        renew: false, // only on the way to a cancel, which never signs in
       });
     } catch (err) {
-      if (ChargewireError.is(err, ErrorCode.serverResuming)) return undefined;
+      if (ChargewireError.is(err, ErrorCode.serverResuming, ErrorCode.invalidToken)) return undefined;
       // A statement that already failed or was cancelled may answer with its error (§6.1).
       if (err instanceof ChargewireError && err.statementId !== undefined) return err.statementId;
       throw err;
@@ -346,10 +347,12 @@ export class Execution {
             idempotent: true,
             signal,
             resume: false,
+            renew: false,
           });
           return;
         } catch (err) {
-          if (ChargewireError.is(err, ErrorCode.serverResuming)) return; // a stopped server runs nothing
+          // A stopped server runs nothing; a refused token's session is gone or going with it.
+          if (ChargewireError.is(err, ErrorCode.serverResuming, ErrorCode.invalidToken)) return;
           if (!unsupported(err)) throw err;
         }
       }
@@ -363,9 +366,11 @@ export class Execution {
         idempotent: true,
         signal,
         resume: false,
+        renew: false,
       });
     } catch (err) {
-      if (!ChargewireError.is(err, ErrorCode.statementNotFound, ErrorCode.serverResuming)) throw err;
+      if (!ChargewireError.is(err, ErrorCode.statementNotFound, ErrorCode.serverResuming, ErrorCode.invalidToken))
+        throw err;
     }
   }
 
@@ -390,9 +395,18 @@ export class Execution {
           idempotent: true,
           signal: AbortSignal.timeout(10_000),
           resume: false,
+          renew: false,
         });
       } catch (err) {
-        if (!ChargewireError.is(err, ErrorCode.statementNotFound, ErrorCode.sessionNotFound, ErrorCode.serverResuming))
+        if (
+          !ChargewireError.is(
+            err,
+            ErrorCode.statementNotFound,
+            ErrorCode.sessionNotFound,
+            ErrorCode.serverResuming,
+            ErrorCode.invalidToken,
+          )
+        )
           throw err;
       }
     });

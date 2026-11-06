@@ -6,6 +6,18 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Fixed
+
+- Closing a connection, statement or prepared statement, and cancelling a statement, no longer
+  signs in. The client renews its access token shortly before it expires (2 minutes, or a quarter
+  of its life) on whatever request comes next, so a connection closed in the last minutes of its
+  token's life sent a password (or token exchange) sign-in first. A server stopped while idle and
+  started again by the first sign-in (§11.2) then started for nobody, and could undo a deliberate
+  stop. Closes and cancels now go with the token the client has, never renewing it before or after
+  an `invalid_token` answer; a close or cancel refused with `invalid_token` counts as done, as one
+  answered `session_not_found` or `server_resuming` already did, since what it ends lived only as
+  long as the token. Statements, metadata and new sessions renew the token as before.
+
 ## [2.3.0] - 2026-11-06
 
 ### Added
