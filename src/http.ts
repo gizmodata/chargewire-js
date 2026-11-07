@@ -212,6 +212,13 @@ export class HttpClient {
   /** Talking to a server from before the protocol's rename, in its spelling. */
   #legacy = false;
   /**
+   * Whether the server has taken a request with a token of this client's. Until then the
+   * connection is new: a `token_revoked` refusal means the token came from before (a cached one,
+   * from before a person stopped the server, §11.2), not that this connection's access was
+   * withdrawn, so the client signs in again once (see #request).
+   */
+  #accepted = false;
+  /**
    * Whether the server's spelling is still open: only with the default base path, until the
    * first answer from the server settles it.
    */
@@ -302,8 +309,11 @@ export class HttpClient {
    * sent once more with a fresh token (the server refused it before running it), unless
    * the refusal's reason says signing in again cannot help or must not happen on its own
    * (`token_revoked`, `credentials_changed`, `principal_dropped`, §4.2): that refusal is
-   * the error, with its reason. A request with `renew` false (closes, cancels) is never sent
-   * again for a token: its `invalid_token` is the error at once.
+   * the error, with its reason. One exception: `token_revoked` before the server has taken
+   * any request of this client's (a new connection given a token from before a Stop) signs in
+   * again once, with the connection's own method; a connection that was in use keeps the
+   * refusal. A request with `renew` false (closes, cancels) is never sent again for a token:
+   * its `invalid_token` is the error at once.
    */
   async request(req: HttpRequest): Promise<Response> {
     if (!this.#open) return this.#request(req);
@@ -373,6 +383,7 @@ export class HttpClient {
       }
       if (resp.status >= 200 && resp.status < 300) {
         this.#resumingAnswer = undefined;
+        if (token !== undefined) this.#accepted = true;
         return resp;
       }
       const problem = await responseError(resp);
@@ -421,7 +432,7 @@ export class HttpClient {
       }
       if (
         problem.code === ErrorCode.invalidToken &&
-        tokenRenewable(problem.reason) &&
+        (tokenRenewable(problem.reason) || (problem.reason === "token_revoked" && !this.#accepted)) &&
         !renewed &&
         !req.anonymous &&
         req.renew !== false &&
@@ -433,6 +444,14 @@ export class HttpClient {
         await this.renewToken(token, req.signal, req.resume !== false);
         attempt--;
         continue;
+      }
+      if (problem.code === ErrorCode.invalidToken && problem.reason === "token_revoked" && !this.canRenew) {
+        throw problem.with({
+          message:
+            `${problem.message}; the token given to connect (token) was revoked, for instance because it was ` +
+            "issued before the server was stopped (GizmoData Cloud revokes those when a person stops a cluster), " +
+            "and the client cannot get another: sign in again for a new token",
+        });
       }
       if (req.idempotent && canRepeat && retryableStatus(resp.status)) {
         const wait = problem.retryAfterMs ?? nextBackoff();

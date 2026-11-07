@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import { type Connection, ErrorCode, ChargewireError, connect } from "../../src/index.js";
-import { type ResumeClock, abortError, setResumeClockForTesting } from "../../src/http.js";
+import { HttpClient, type ResumeClock, abortError, setResumeClockForTesting } from "../../src/http.js";
 import { FakeServer, json, problem } from "./fake.js";
 
 /** Moves time forward by each wait instead of sleeping. */
@@ -265,6 +265,108 @@ describe("lazy connect to a stopped server (§11.2)", () => {
       await fresh.close();
     }
     await old.close();
+  });
+
+  describe("a new connection handed a token from before a Stop (token_revoked)", () => {
+    /** A server where `stale` was revoked by a person's Stop and `fresh` is good. */
+    function revoking(state: string | null) {
+      const server = stopped(state);
+      server.validTokens.add("fresh");
+      const fetch: typeof globalThis.fetch = (input, init) =>
+        new Headers(init?.headers).get("authorization") === "Bearer stale"
+          ? Promise.resolve(
+              problem(401, ErrorCode.invalidToken, { reason: "token_revoked" }, { "www-authenticate": "Bearer" }),
+            )
+          : server.fetch(input, init);
+      return { server, fetch };
+    }
+    const withProvider = (fetch: typeof globalThis.fetch, tokens: string[]) => {
+      const handed: string[] = [];
+      const conn = connect({
+        url: "chargewire://db.test:31337",
+        tokenProvider: () => {
+          const t = tokens[Math.min(handed.length, tokens.length - 1)]!;
+          handed.push(t);
+          return t;
+        },
+        fetch,
+        logger: quiet,
+      });
+      return { conn, handed };
+    };
+
+    for (const state of [null, "stopped"]) {
+      test(`${state === null ? "eager" : "lazy"}: its first request signs in again once, with its own method, and runs`, async () => {
+        const { fetch } = revoking(state);
+        const { conn, handed } = withProvider(fetch, ["stale", "fresh"]);
+        const c = await conn;
+        expect(await c.execute("UPDATE t SET x = 1")).toBe(3);
+        expect(handed).toEqual(["stale", "fresh"]);
+        await c.close();
+      });
+    }
+
+    test("a second refusal is the error: one new sign-in, not a loop", async () => {
+      const { fetch } = revoking(null);
+      const { conn, handed } = withProvider(fetch, ["stale"]);
+      const err = (await conn.catch((e: unknown) => e)) as ChargewireError;
+      expect(err.code).toBe(ErrorCode.invalidToken);
+      expect(err.reason).toBe("token_revoked");
+      expect(handed).toEqual(["stale", "stale"]);
+    });
+
+    test("a connection that was in use keeps the refusal: it never signs in on its own", async () => {
+      const { server, fetch } = revoking(null);
+      server.validTokens.add("fresh2");
+      let stoppedNow = false;
+      const afterStop: typeof globalThis.fetch = (input, init) =>
+        stoppedNow && new Headers(init?.headers).get("authorization") === "Bearer fresh"
+          ? Promise.resolve(problem(401, ErrorCode.invalidToken, { reason: "token_revoked" }))
+          : fetch(input, init);
+      const { conn, handed } = withProvider(afterStop, ["fresh", "fresh2"]);
+      const c = await conn; // in use: the server took its session request
+      stoppedNow = true; // a person's Stop revokes its token
+      const err = (await c.execute("UPDATE t SET x = 1").catch((e: unknown) => e)) as ChargewireError;
+      expect(err.code).toBe(ErrorCode.invalidToken);
+      expect(err.reason).toBe("token_revoked");
+      expect(handed).toEqual(["fresh"]);
+      await c.close();
+    });
+
+    test("browser sign-in: the new connection runs the browser flow again once (a silent single sign-on)", async () => {
+      const { server, fetch } = revoking(null);
+      const signIns: string[] = [];
+      const http = new HttpClient({
+        base: new URL("http://db.test:31337/chargewire"),
+        fetch,
+        credentials: {
+          kind: "browser",
+          signIn: () => {
+            const accessToken = signIns.length === 0 ? "stale" : "fresh";
+            signIns.push(accessToken);
+            return Promise.resolve({ accessToken, expiresIn: 3600 });
+          },
+        },
+        maxAttempts: 1,
+        logger: quiet,
+      });
+      await http.authenticate();
+      const resp = await http.request({ method: "POST", path: "/v1/sessions", idempotent: true });
+      expect(resp.status).toBe(201);
+      expect(signIns).toEqual(["stale", "fresh"]);
+      expect(server.sessions).toBe(1);
+    });
+
+    test("a token given to connect as is keeps failing, saying it was revoked and to sign in again", async () => {
+      const { fetch } = revoking(null);
+      const err = (await connect({ url: "chargewire://db.test:31337", token: "stale", fetch, logger: quiet }).catch(
+        (e: unknown) => e,
+      )) as ChargewireError;
+      expect(err.code).toBe(ErrorCode.invalidToken);
+      expect(err.reason).toBe("token_revoked");
+      expect(err.message).toContain("issued before the server was stopped");
+      expect(err.message).toContain("sign in again for a new token");
+    });
   });
 
   for (const state of [null, "serving", "some_future_state"]) {

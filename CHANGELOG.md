@@ -6,6 +6,19 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [2.3.5] - 2026-11-07
+
+### Fixed
+
+- A new connection whose first request is refused with `invalid_token` and `token_revoked` signs
+  in again once, with its own method (`tokenProvider`, browser sign-in, password, token exchange),
+  instead of failing. That is a token from before a person stopped the server (GizmoData Cloud
+  revokes those), handed to the connection by a cache, such as a token provider's or an identity
+  provider's single sign-on. A second refusal is the error. A connection the server has taken a
+  request from still never signs in again on its own after `token_revoked` (§4.2). A `token` given
+  to `connect` still fails, now saying it was revoked (for instance issued before the server was
+  stopped) and to sign in again for a new one.
+
 ## [2.3.4] - 2026-11-07
 
 ### Changed
