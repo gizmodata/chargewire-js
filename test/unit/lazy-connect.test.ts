@@ -231,6 +231,42 @@ describe("lazy connect to a stopped server (§11.2)", () => {
     await first.close();
   });
 
+  test("after a Stop revoked the old connection's token, a new connect signs in fresh and runs", async () => {
+    // Serving: a connection signs in (t1). A person's Stop revokes t1 (the stand-in refuses it
+    // with token_revoked); the old connection must not sign in again on its own (§4.2)...
+    const server = stopped(null);
+    const old = await open(server);
+    server.on("POST", /\/statements$/, (req) =>
+      req.headers.get("authorization") === "Bearer t1"
+        ? problem(401, ErrorCode.invalidToken, { reason: "token_revoked" }, { "www-authenticate": "Bearer" })
+        : json(200, updateDoc),
+    );
+    const refused = (await old.execute("UPDATE t SET x = 1").catch((e: unknown) => e)) as ChargewireError;
+    expect(refused.code).toBe(ErrorCode.invalidToken);
+    expect(refused.reason).toBe("token_revoked");
+    expect(server.tokens).toBe(1);
+    // ...but connecting again starts it: a new connect, lazy (stopped) or not, signs in fresh.
+    for (const state of ["stopped", null]) {
+      server.on("GET", /^\/chargewire$/, () =>
+        json(200, {
+          protocol: "chargewire",
+          protocol_versions: ["1"],
+          capabilities: server.capabilities,
+          auth: { grant_types: ["password"] },
+          ...(state !== null ? { state } : {}),
+        }),
+      );
+      const before = server.tokens;
+      const fresh = await open(server);
+      expect(await fresh.execute("UPDATE t SET x = 1")).toBe(3);
+      expect(server.tokens).toBe(before + 1);
+      const statement = server.requests.filter((r) => r.url.pathname.endsWith("/statements")).at(-1)!;
+      expect(statement.headers.get("authorization")).toBe(`Bearer t${before + 1}`);
+      await fresh.close();
+    }
+    await old.close();
+  });
+
   for (const state of [null, "serving", "some_future_state"]) {
     test(`a server whose discovery has ${state === null ? "no state" : `state ${state}`}: connect signs in and opens the session`, async () => {
       const server = stopped(state);
