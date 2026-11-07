@@ -70,6 +70,79 @@ describe("tokens (§4)", () => {
   });
 });
 
+// A sign-in is what starts a stopped server again (§11.2), so ending things must never sign in:
+// a connection closed in the last minutes of its token's life would start a server for nobody.
+describe("closes and cancels never sign in (§4.2, §11.2)", () => {
+  const signIns = (server: FakeServer): number => server.count("POST", /\/auth\/token$/);
+  const tokensSent = (server: FakeServer): (string | null)[] =>
+    server.requests.filter((r) => !r.url.pathname.endsWith("/auth/token")).map((r) => r.headers.get("authorization"));
+
+  test("closing a connection whose token is due for renewal sends only the DELETE, with that token", async () => {
+    const server = new FakeServer();
+    server.expiresIn = 1;
+    const conn = await open(server);
+    await new Promise((r) => setTimeout(r, 800)); // past three quarters of its life
+    await conn.close();
+    expect(signIns(server)).toBe(1); // connect's only
+    const deletes = server.requests.filter((r) => r.method === "DELETE");
+    expect(deletes.map((r) => [r.url.pathname, r.headers.get("authorization")])).toEqual([
+      ["/chargewire/v1/sessions/s1", "Bearer t1"],
+    ]);
+  });
+
+  test("cancelling a statement whose token is due for renewal sends the cancel with that token, and no sign-in", async () => {
+    const server = new FakeServer();
+    server.expiresIn = 1;
+    let release: ((resp: Response) => void) | undefined;
+    server.on("POST", /\/sessions\/s1\/statements$/, () =>
+      json(201, { statement_id: "q1", state: "running", result: null }),
+    );
+    // The status poll, sent while the token was fresh, is held until the cancel arrives.
+    server.on("GET", /\/statements\/q1$/, () => new Promise<Response>((resolve) => (release = resolve)));
+    server.on("POST", /\/statements\/q1\/cancel$/, () => {
+      release?.(json(200, { statement_id: "q1", state: "cancelled", cancel_reason: "client" }));
+      return json(202, { statement_id: "q1", state: "running" });
+    });
+    server.on("DELETE", /\/statements\/q1$/, () => new Response(null, { status: 204 }));
+    const conn = await open(server);
+    const controller = new AbortController();
+    const work = conn.execute("UPDATE t SET x = 1", undefined, { signal: controller.signal });
+    while (release === undefined) await new Promise((r) => setTimeout(r, 5));
+    await new Promise((r) => setTimeout(r, 800)); // the token is now due for renewal
+    controller.abort();
+    await expectCode(work, ErrorCode.statementCancelled);
+    await conn.close();
+    expect(server.count("POST", /\/statements\/q1\/cancel$/)).toBe(1);
+    expect(signIns(server)).toBe(1);
+    expect(new Set(tokensSent(server))).toEqual(new Set([null, "Bearer t1"])); // null: discovery
+  });
+
+  test("a close whose DELETE is refused with invalid_token is done: no error, no sign-in", async () => {
+    const server = new FakeServer();
+    const conn = await open(server);
+    server.validTokens.clear(); // the server forgot every token: the session went with them
+    await conn.close();
+    expect(conn.closed).toBe(true);
+    expect(signIns(server)).toBe(1);
+    expect(server.count("DELETE", /\/sessions\/s1$/)).toBe(1);
+  });
+
+  test("a statement whose token is due for renewal still renews first, and the close then uses the new token", async () => {
+    const server = new FakeServer();
+    server.expiresIn = 1;
+    server.on("POST", /\/statements$/, () => json(200, doneDoc("q1", { kind: "update", rows_affected: 1 })));
+    const conn = await open(server);
+    await new Promise((r) => setTimeout(r, 800));
+    expect(await conn.execute("DELETE FROM t")).toBe(1);
+    expect(signIns(server)).toBe(2);
+    const statement = server.requests.find((r) => r.method === "POST" && r.url.pathname.endsWith("/statements"))!;
+    expect(statement.headers.get("authorization")).toBe("Bearer t2");
+    await conn.close();
+    expect(signIns(server)).toBe(2);
+    expect(server.requests.at(-1)!.headers.get("authorization")).toBe("Bearer t2");
+  });
+});
+
 describe("invalid_token reasons (§4.2)", () => {
   for (const reason of ["token_revoked", "credentials_changed", "principal_dropped"]) {
     test(`after ${reason} the client does not sign in again, and reports the reason`, async () => {

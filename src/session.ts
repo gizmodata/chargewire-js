@@ -347,15 +347,25 @@ export class Session {
     return result.options ?? {};
   }
 
-  /** Ends the session (§5.4). One the server no longer has counts as closed. Never replaced afterwards. */
+  /**
+   * Ends the session (§5.4). One the server no longer has counts as closed. Never replaced
+   * afterwards, and never a reason to sign in: sent with the token the client has.
+   */
   async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
     try {
       // A stopped server (server_resuming) holds no sessions: closed too, without waiting for it.
-      await this.#http.void({ method: "DELETE", path: sessionPath(this.#id), idempotent: true, resume: false });
+      // A refused token (invalid_token) means the session is gone or going with it.
+      await this.#http.void({
+        method: "DELETE",
+        path: sessionPath(this.#id),
+        idempotent: true,
+        resume: false,
+        renew: false,
+      });
     } catch (err) {
-      if (ChargewireError.is(err, ErrorCode.sessionNotFound, ErrorCode.serverResuming)) return;
+      if (ChargewireError.is(err, ErrorCode.sessionNotFound, ErrorCode.serverResuming, ErrorCode.invalidToken)) return;
       throw err;
     }
   }

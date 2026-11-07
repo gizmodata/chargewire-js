@@ -865,6 +865,7 @@ export class PreparedStatement {
         path: `${sessionPath(ref.sessionId)}/prepared/${encodeURIComponent(ref.preparedId)}`,
         idempotent: true,
         resume: false, // a stopped server holds no prepared statements
+        renew: false, // nor does one that refuses the token: never sign in to close
       });
     } catch (err) {
       if (
@@ -874,6 +875,7 @@ export class PreparedStatement {
           ErrorCode.sessionNotFound,
           ErrorCode.clientConnectionClosed,
           ErrorCode.serverResuming,
+          ErrorCode.invalidToken,
         )
       )
         throw err;
