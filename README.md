@@ -377,6 +377,16 @@ Statement options, per call or as `connect` defaults:
   over 16 MiB is sent once. Other 503 answers, such as `server_draining`, keep the retries above.
   `close()` (of a connection or a prepared statement) does not wait for a resuming server: a
   stopped server holds no sessions.
+- **A stopped server: lazy connect.** When the discovery document says `"state": "stopped"` (a
+  stand-in answering for a stopped server, such as GizmoData Cloud's resume holder), `connect`
+  returns at once without signing in or opening a session, since the sign-in is what starts the
+  server and a connection opened for nothing (a pool refilling) must not start it. The first call
+  that does work (a statement, `prepare`, metadata, an ingest, `setOptions`, `setAutocommit`,
+  `commit`/`rollback`, `getSession`) signs in, opens the session and waits for the server to
+  start as above; calls made at once share that sign-in. Until then `sessionId` is `""`, reading
+  the connection's properties sends nothing, and `close()` sends nothing. A wrong password or an
+  unreachable server is that first call's error, the same one `connect` would have given. Without
+  `state` (a server that is serving), `connect` signs in and opens the session as before.
 
   `onResuming` reports each wait, so an application can say "the server is resuming" (and offer a
   Cancel button that aborts `connect`'s or the call's `signal`) instead of looking frozen. It is

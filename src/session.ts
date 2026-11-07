@@ -135,13 +135,23 @@ export class Session {
   readonly #abandoned = new Map<string, ChargewireError>();
   /** The idle timeout the server announced. */
   idleTimeoutS: number | undefined;
+  /** Whether the session exists on the server: false for a lazy one until its first request. */
+  #opened: boolean;
+  /** The sign-in and session creation under way for a lazy session (ensureOpen). */
+  #opening: Promise<void> | undefined;
 
-  private constructor(http: HttpClient, reconnect: boolean, options: Record<string, unknown>, doc: SessionDocument) {
+  private constructor(
+    http: HttpClient,
+    reconnect: boolean,
+    options: Record<string, unknown>,
+    doc: SessionDocument | undefined,
+  ) {
     this.#http = http;
     this.#reconnect = reconnect;
     this.#options = options;
-    this.#id = doc.session_id;
-    this.idleTimeoutS = doc.idle_timeout_s;
+    this.#id = doc?.session_id ?? "";
+    this.idleTimeoutS = doc?.idle_timeout_s;
+    this.#opened = doc !== undefined;
   }
 
   /** Creates a session (§5.1). */
@@ -154,6 +164,40 @@ export class Session {
     const copy = { ...options };
     const doc = await create(http, copy, signal);
     return new Session(http, reconnect, copy, doc);
+  }
+
+  /**
+   * A session that is signed in for and created at its first request that does work (lazy
+   * connect to a stopped server, §11.2): until then nothing is sent, so nothing starts the server.
+   */
+  static lazy(http: HttpClient, options: Record<string, unknown>, reconnect: boolean): Session {
+    return new Session(http, reconnect, { ...options }, undefined);
+  }
+
+  /** Whether the session exists on the server yet (a lazy one: not before its first request). */
+  get opened(): boolean {
+    return this.#opened;
+  }
+
+  /**
+   * Signs in and creates a lazy session, once; does nothing for one that is open. The sign-in
+   * is what starts a stopped server, so this runs only for a request that does work. A failure
+   * (wrong credentials, a server that can't be reached) is that request's error, and the next
+   * request tries again.
+   */
+  async ensureOpen(signal?: AbortSignal): Promise<void> {
+    if (this.#opened) return;
+    this.#checkOpen();
+    this.#opening ??= (async () => {
+      await this.#http.authenticate(signal);
+      const doc = await create(this.#http, this.#options, signal);
+      this.#id = doc.session_id;
+      this.idleTimeoutS = doc.idle_timeout_s;
+      this.#opened = true;
+    })().finally(() => {
+      this.#opening = undefined;
+    });
+    await this.#opening;
   }
 
   get http(): HttpClient {
@@ -267,8 +311,14 @@ export class Session {
   }
 
   /** Sends a request built for the current session, and handles the session being gone as `scope` allows. */
-  async do(scope: Scope, lostWhat: string, build: (sessionId: string) => HttpRequest): Promise<Response> {
+  async do(
+    scope: Scope,
+    lostWhat: string,
+    build: (sessionId: string) => HttpRequest,
+    signal?: AbortSignal,
+  ): Promise<Response> {
     this.#checkOpen();
+    await this.ensureOpen(signal);
     const id = this.#id;
     const req = build(id);
     const tokenUsed = this.#http.currentToken;
@@ -334,12 +384,12 @@ export class Session {
 
   /** Reads the session document (§5.2). */
   async get(signal?: AbortSignal): Promise<SessionDocument> {
-    const resp = await this.do("session", "", (id) => ({
-      method: "GET",
-      path: sessionPath(id),
-      idempotent: true,
+    const resp = await this.do(
+      "session",
+      "",
+      (id) => ({ method: "GET", path: sessionPath(id), idempotent: true, signal }),
       signal,
-    }));
+    );
     const doc = await decodeJSON<SessionDocument>(resp);
     return { ...doc, transaction: transactionState(doc.transaction) };
   }
@@ -347,13 +397,12 @@ export class Session {
   /** Sets session options (§5.3), remembering the ones the server took so a replacement gets them. */
   async setOptions(options: Record<string, unknown>, signal?: AbortSignal): Promise<Record<string, unknown>> {
     const body = jsonBody({ options });
-    const resp = await this.do("session", "", (id) => ({
-      method: "PATCH",
-      path: sessionPath(id),
-      body,
-      idempotent: true,
+    const resp = await this.do(
+      "session",
+      "",
+      (id) => ({ method: "PATCH", path: sessionPath(id), body, idempotent: true, signal }),
       signal,
-    }));
+    );
     const result = await decodeJSON<OptionsResult>(resp);
     const errors = result.errors ?? {};
     for (const [key, value] of Object.entries(options)) {
@@ -379,6 +428,8 @@ export class Session {
   async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
+    if (this.#opening !== undefined) await this.#opening.catch(() => {});
+    if (!this.#opened) return; // a lazy session never opened: nothing to end, nothing sent
     try {
       // A stopped server (server_resuming) holds no sessions: closed too, without waiting for it.
       // A refused token (invalid_token) means the session is gone or going with it.
@@ -405,7 +456,7 @@ export class Session {
    * replacement, as for a lost session, and deletes the old one.
    */
   async tidyTransaction(rollback: boolean): Promise<void> {
-    if (this.#closed) return;
+    if (this.#closed || !this.#opened) return;
     const id = this.#id;
     const send = (req: Omit<HttpRequest, "resume" | "renew" | "signal">): Promise<Response> =>
       this.#http.request({ ...req, resume: false, renew: false, signal: AbortSignal.timeout(tidyTimeoutMs) });
@@ -470,6 +521,7 @@ export class Session {
 
   async #endTransaction(action: "commit" | "rollback", signal: AbortSignal | undefined): Promise<void> {
     this.#checkOpen();
+    await this.ensureOpen(signal); // a transaction call is work: a lazy session opens for it
     const id = this.#id;
     const resp = await this.doHandle(id, "open transaction", {
       method: "POST",

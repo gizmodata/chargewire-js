@@ -186,11 +186,16 @@ export class Execution {
       session.noteSql(this.sessionId, this.sql);
       return session.doHandle(this.sessionId, "prepared statement", this.#request(this.sessionId, mode, this.signal));
     }
-    return session.do("statement", "", (id) => {
-      this.sessionId = id;
-      session.noteSql(id, this.sql);
-      return this.#request(id, mode, this.signal);
-    });
+    return session.do(
+      "statement",
+      "",
+      (id) => {
+        this.sessionId = id;
+        session.noteSql(id, this.sql);
+        return this.#request(id, mode, this.signal);
+      },
+      this.signal,
+    );
   }
 
   /** Sends the submission again with the same Idempotency-Key, to learn its statement without running it twice (§6.7). */
