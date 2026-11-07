@@ -403,7 +403,9 @@ Statement options, per call or as `connect` defaults:
 - **Tokens** are renewed before they expire and, once, when the server refuses one with
   `invalid_token` without a reason, with `token_expired` or with a reason the client doesn't know.
   After `token_revoked`, `credentials_changed` or `principal_dropped` (§4.2) the client does not sign
-  in again on its own: the error carries the `reason`.
+  in again on its own: the error carries the `reason`. Closes and cancels never renew a token or
+  sign in: they go with the token the client has, and one refused with `invalid_token` counts as
+  done, so closing a connection never starts a server that was stopped while idle (§11.2).
 - **Lost sessions** (`session_not_found`; `session_ended` for an idle transaction,
   `idle_in_transaction`; or `session_ended` for an expired token when the client can get a new
   token, which it does first) are replaced by a new session with the options the client set, and
