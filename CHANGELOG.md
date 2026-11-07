@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [2.3.3] - 2026-11-07
+
 ### Added
 
 - Lazy connect to a stopped server. When the discovery document says `"state": "stopped"` (a
