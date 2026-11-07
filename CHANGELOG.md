@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [2.3.1] - 2026-11-06
+
 ### Fixed
 
 - Closing a connection, statement or prepared statement, and cancelling a statement, no longer
