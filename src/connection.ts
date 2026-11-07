@@ -289,12 +289,19 @@ export async function connect(options: ConnectOptions): Promise<Connection> {
       message: `the server does not accept the ${grant} grant (it offers ${grants.join(", ") || "none"})`,
     });
   }
-  await http.authenticate(options.signal);
-
   const sessionOptions: Record<string, unknown> = { ...options.sessionOptions };
   if (options.catalog !== undefined) sessionOptions["catalog"] = options.catalog;
   if (options.schema !== undefined) sessionOptions["schema"] = options.schema;
-  const session = await Session.open(http, sessionOptions, options.reconnect ?? true, options.signal);
+  const reconnect = options.reconnect ?? true;
+  // A stand-in for a stopped server says so (§3.1, §11.2): connect lazily, since signing in is
+  // what starts it, and a connection opened for nothing (a pool refilling) must not.
+  let session: Session;
+  if (discovery.state === "stopped") {
+    session = Session.lazy(http, sessionOptions, reconnect);
+  } else {
+    await http.authenticate(options.signal);
+    session = await Session.open(http, sessionOptions, reconnect, options.signal);
+  }
   const core = new Core({ http, session, discovery, platform, settings, resultBufferBytes, discoveryRttMs });
   await core.resolveCodec(settings);
   return new Connection(core);
@@ -480,7 +487,10 @@ export class Connection {
     this.metadata = new Metadata(core);
   }
 
-  /** The current session's id. It changes when a lost session is replaced. */
+  /**
+   * The current session's id. It changes when a lost session is replaced. Empty while a
+   * connection made to a stopped server has not opened its session yet (lazy connect).
+   */
   get sessionId(): string {
     return this.#core.session.id;
   }
@@ -625,15 +635,20 @@ export class Connection {
       temporary: options.temporary ? "true" : undefined,
     };
     const headers = { "Idempotency-Key": newIdempotencyKey() };
-    const resp = await core.session.do("statement", "", (id) => ({
-      method: "POST",
-      path: `${sessionPath(id)}/ingest`,
-      query,
-      headers,
-      body,
-      idempotent: true,
-      signal: options.signal,
-    }));
+    const resp = await core.session.do(
+      "statement",
+      "",
+      (id) => ({
+        method: "POST",
+        path: `${sessionPath(id)}/ingest`,
+        query,
+        headers,
+        body,
+        idempotent: true,
+        signal: options.signal,
+      }),
+      options.signal,
+    );
     const answer = await decodeJSON<{ rows_ingested?: unknown }>(resp);
     if (typeof answer.rows_ingested !== "number") throw protocolError("the ingest answer has no rows_ingested");
     return answer.rows_ingested;
@@ -979,10 +994,15 @@ async function prepareOnServer(
 ): Promise<{ ref: PreparedRef; doc: PreparedDocument }> {
   core.require(Capability.preparedStatements, "prepared statements (and Arrow parameters)");
   let sessionId = core.session.id;
-  const resp = await core.session.do("session", "", (id) => {
-    sessionId = id;
-    return { method: "POST", path: `${sessionPath(id)}/prepared`, body: jsonBody({ sql }), idempotent: true, signal };
-  });
+  const resp = await core.session.do(
+    "session",
+    "",
+    (id) => {
+      sessionId = id;
+      return { method: "POST", path: `${sessionPath(id)}/prepared`, body: jsonBody({ sql }), idempotent: true, signal };
+    },
+    signal,
+  );
   const doc = await decodeJSON<PreparedDocument>(resp);
   if (typeof doc.prepared_id !== "string" || doc.prepared_id === "")
     throw protocolError("the server prepared a statement without an id");

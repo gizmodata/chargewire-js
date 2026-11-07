@@ -6,6 +6,18 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Added
+
+- Lazy connect to a stopped server. When the discovery document says `"state": "stopped"` (a
+  stand-in answering for a stopped server, such as GizmoData Cloud's resume holder), `connect`
+  returns without signing in or opening a session: the first call that does work (a statement,
+  `prepare`, metadata, an ingest, session options, a transaction call, `getSession`) signs in,
+  opens the session and waits for the server to start. Until then reading the connection's
+  properties and `close()` send nothing, so a connection opened for nothing (a pool refilling, an
+  app that connects at startup) no longer starts a stopped server. A wrong password or an
+  unreachable server is that first call's error, the one `connect` would have given. Without
+  `state`, nothing changes. `sessionId` is `""` until the session opens.
+
 ## [2.3.2] - 2026-11-07
 
 ### Fixed

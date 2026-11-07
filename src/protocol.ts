@@ -37,6 +37,11 @@ export interface DiscoveryDocument {
   };
   /** Where the server's optional documents are (§3.3): `openapi`, with capability `openapi`. */
   links?: { openapi?: string; [key: string]: unknown };
+  /**
+   * Sent by a stand-in answering for a server that is not running: `"stopped"` (clients then
+   * connect lazily, §11.2). Open-ended; absent means the server is serving.
+   */
+  state?: string;
   [key: string]: unknown;
 }
 

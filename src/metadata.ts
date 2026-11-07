@@ -170,12 +170,17 @@ export class Metadata {
     const core = this.#core;
     core.checkOpen();
     await core.settle();
-    const resp = await core.session.do("session", "", (id) => ({
-      method: "GET",
-      path: `${sessionPath(id)}/metadata/server-info`,
-      idempotent: true,
-      signal: options.signal,
-    }));
+    const resp = await core.session.do(
+      "session",
+      "",
+      (id) => ({
+        method: "GET",
+        path: `${sessionPath(id)}/metadata/server-info`,
+        idempotent: true,
+        signal: options.signal,
+      }),
+      options.signal,
+    );
     const info = await decodeJSON<ServerInfo>(resp);
     if (info === null || typeof info !== "object" || Array.isArray(info)) {
       throw protocolError("the server-info answer is not a JSON object");
@@ -237,14 +242,19 @@ export class Metadata {
     await core.settle();
     const headers: Record<string, string> = { Accept: mediaTypeArrow };
     if (core.settings.ipcCodec !== undefined) headers["Chargewire-IPC-Compression"] = core.settings.ipcCodec;
-    const resp = await core.session.do("session", "", (id) => ({
-      method: "GET",
-      path: `${sessionPath(id)}/metadata/${kind}`,
-      query,
-      headers,
-      idempotent: true,
-      signal: options.signal,
-    }));
+    const resp = await core.session.do(
+      "session",
+      "",
+      (id) => ({
+        method: "GET",
+        path: `${sessionPath(id)}/metadata/${kind}`,
+        query,
+        headers,
+        idempotent: true,
+        signal: options.signal,
+      }),
+      options.signal,
+    );
     return readTable(resp);
   }
 }
