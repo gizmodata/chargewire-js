@@ -418,7 +418,11 @@ Statement options, per call or as `connect` defaults:
 - **Tokens** are renewed before they expire and, once, when the server refuses one with
   `invalid_token` without a reason, with `token_expired` or with a reason the client doesn't know.
   After `token_revoked`, `credentials_changed` or `principal_dropped` (§4.2) the client does not sign
-  in again on its own: the error carries the `reason`. Closes and cancels never renew a token or
+  in again on its own: the error carries the `reason`. The exception is a new connection: when
+  `token_revoked` answers a request before the server has taken any (a `tokenProvider` or a
+  browser sign-in handed it a token from before a person stopped the server), it signs in again
+  once with its own method, and a second refusal is the error. A `token` given to `connect` can't
+  be replaced: its refusal says the token was revoked and to sign in again. Closes and cancels never renew a token or
   sign in: they go with the token the client has, and one refused with `invalid_token` counts as
   done, so closing a connection never starts a server that was stopped while idle (§11.2). The same
   goes for `transaction()`'s clean-up and for `onProgress` polls; when the clean-up can't reach the
