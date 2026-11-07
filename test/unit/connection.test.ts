@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 
-import { tableFromArrays } from "apache-arrow";
+import { tableFromArrays, tableToIPC } from "apache-arrow";
 import { describe, expect, test } from "vitest";
 
 import { type Connection, ErrorCode, ChargewireError, connect, version } from "../../src/index.js";
@@ -140,6 +140,135 @@ describe("closes and cancels never sign in (§4.2, §11.2)", () => {
     await conn.close();
     expect(signIns(server)).toBe(2);
     expect(server.requests.at(-1)!.headers.get("authorization")).toBe("Bearer t2");
+  });
+});
+
+// transaction()'s clean-up and progress observations only tidy up or watch: like closes, they
+// must never sign in (which starts a stopped server, §11.2) or open a session.
+describe("clean-up and observation never sign in (§4.2, §11.2)", () => {
+  const signIns = (server: FakeServer): number => server.count("POST", /\/auth\/token$/);
+  const sleepMs = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+  /** A server with transactions: PATCH takes every option, commit and rollback answer 204. */
+  const transactional = (): FakeServer => {
+    const server = new FakeServer();
+    server.on("PATCH", /^\/chargewire\/v1\/sessions\/[^/]+$/, (req) =>
+      json(200, { options: (JSON.parse(req.body) as { options: unknown }).options }),
+    );
+    server.on("POST", /\/(commit|rollback)$/, () => new Response(null, { status: 204 }));
+    server.on("POST", /\/statements$/, () => json(200, doneDoc("q1", { kind: "update", rows_affected: 1 })));
+    return server;
+  };
+  const sent = (server: FakeServer): string[] =>
+    server.requests
+      .filter((r) => r.url.pathname !== "/chargewire")
+      .map((r) => {
+        const what = r.method === "PATCH" ? ` ${r.body}` : "";
+        return `${r.method} ${r.url.pathname}${what} ${r.headers.get("authorization") ?? "-"}`;
+      });
+
+  test("transaction()'s clean-up late in a token's life (rollback, autocommit on) sends no sign-in", async () => {
+    const server = transactional();
+    server.expiresIn = 1;
+    const conn = await open(server);
+    const boom = new Error("boom");
+    const err = await conn
+      .transaction(async () => {
+        await sleepMs(800); // past three quarters of the token's life
+        throw boom;
+      })
+      .catch((e: unknown) => e);
+    expect(err).toBe(boom);
+    expect(signIns(server)).toBe(1);
+    expect(sent(server)).toEqual([
+      "POST /chargewire/v1/auth/token -",
+      "POST /chargewire/v1/sessions Bearer t1",
+      'PATCH /chargewire/v1/sessions/s1 {"options":{"autocommit":false}} Bearer t1',
+      "POST /chargewire/v1/sessions/s1/rollback Bearer t1",
+      'PATCH /chargewire/v1/sessions/s1 {"options":{"autocommit":true}} Bearer t1',
+    ]);
+  });
+
+  test("a clean-up refused with invalid_token keeps the caller's error, and the session is given up", async () => {
+    const server = transactional();
+    const conn = await open(server);
+    const boom = new Error("boom");
+    const err = await conn
+      .transaction(async () => {
+        server.validTokens.clear(); // e.g. the token expired meanwhile
+        throw boom;
+      })
+      .catch((e: unknown) => e);
+    expect(err).toBe(boom);
+    expect(signIns(server)).toBe(1);
+    // The rollback did not get through, so autocommit is not turned on there: that would commit.
+    expect(server.count("POST", /\/rollback$/)).toBe(1);
+    expect(server.count("PATCH", /\/sessions\/s1$/)).toBe(1);
+    expect(conn.sessionId).toBe("s1");
+    // The next real call signs in, runs on a new session (autocommit on) and ends the old one.
+    expect(await conn.execute("DELETE FROM t")).toBe(1);
+    expect(signIns(server)).toBe(2);
+    expect(conn.sessionId).toBe("s2");
+    expect(server.count("POST", /\/sessions\/s2\/statements$/)).toBe(1);
+    expect(server.count("POST", /\/sessions\/s1\/statements$/)).toBe(0);
+    while (server.count("DELETE", /\/sessions\/s1$/) === 0) await sleepMs(5);
+    const create = server.requests.filter((r) => r.method === "POST" && r.url.pathname === "/chargewire/v1/sessions");
+    expect(JSON.parse(create.at(-1)!.body)).toEqual({ options: { autocommit: true } });
+    await conn.close();
+  });
+
+  test("work inside a transaction late in a token's life still renews it (the clean-up then uses the new one)", async () => {
+    const server = transactional();
+    server.expiresIn = 1;
+    const conn = await open(server);
+    await conn.transaction(async (c) => {
+      await sleepMs(800);
+      expect(await c.execute("DELETE FROM t")).toBe(1);
+    });
+    expect(signIns(server)).toBe(2);
+    const statement = server.requests.find((r) => r.method === "POST" && r.url.pathname.endsWith("/statements"))!;
+    expect(statement.headers.get("authorization")).toBe("Bearer t2");
+    expect(sent(server).slice(-2)).toEqual([
+      "POST /chargewire/v1/sessions/s1/commit Bearer t2",
+      'PATCH /chargewire/v1/sessions/s1 {"options":{"autocommit":true}} Bearer t2',
+    ]);
+  });
+
+  test("progress observations late in a token's life send no sign-in", async () => {
+    const server = new FakeServer();
+    server.expiresIn = 1;
+    server.on("POST", /\/statements$/, () => json(201, { statement_id: "q1", state: "running", result: null }));
+    server.on("GET", /\/statements\/q1$/, () =>
+      json(200, {
+        statement_id: "q1",
+        state: "running",
+        result: { kind: "rows", partitions: [{ index: 0, location: null }], retained: false },
+      }),
+    );
+    // The result's bytes are held back while the token passes its renewal point.
+    let release: (() => void) | undefined;
+    server.on("GET", /\/statements\/q1\/result$/, () => {
+      const bytes = tableToIPC(tableFromArrays({ answer: [42] }), "stream");
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          release = () => {
+            controller.enqueue(bytes);
+            controller.close();
+          };
+        },
+      });
+      return new Response(body, { status: 200, headers: { "content-type": "application/vnd.apache.arrow.stream" } });
+    });
+    server.on("DELETE", /\/statements\/q1$/, () => new Response(null, { status: 204 }));
+    const conn = await open(server);
+    const table = conn.stream("SELECT 42", undefined, { onProgress: () => {} }).toTable();
+    while (release === undefined) await sleepMs(5);
+    const polled = server.count("GET", /\/statements\/q1$/);
+    await sleepMs(1100); // the token is now due for renewal, and the poller has run since
+    expect(server.count("GET", /\/statements\/q1$/)).toBeGreaterThan(polled);
+    release();
+    expect((await table).numRows).toBe(1);
+    await conn.close();
+    expect(signIns(server)).toBe(1);
   });
 });
 

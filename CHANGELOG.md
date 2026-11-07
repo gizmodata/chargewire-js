@@ -6,6 +6,21 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Fixed
+
+- `transaction()`'s clean-up (the rollback after an error, and turning autocommit back on) no
+  longer signs in, opens a session or waits for a resuming server. Late in a token's life it
+  renewed the token first, and that sign-in could start a server stopped while idle (§11.2). It
+  now goes with the token the client has, for at most 10 s per request, and never hides the error
+  `work` or the commit threw. When the server no longer has the session (or is stopped), its
+  transaction is gone with it. When the clean-up can't tell (the token was refused, no answer),
+  the client sends nothing more to that session (turning autocommit on with the transaction still
+  open would commit it) and gives it up: the next call opens a new session, as for a lost session,
+  and deletes the old one.
+- Progress observations (`onProgress` polls, and the last report when a result ends) no longer
+  sign in or open a session: they go with the token the client has, and a refusal only skips that
+  report.
+
 ## [2.3.1] - 2026-11-06
 
 ### Fixed
