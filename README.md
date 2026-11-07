@@ -381,10 +381,15 @@ Statement options, per call or as `connect` defaults:
   stand-in answering for a stopped server, such as GizmoData Cloud's resume holder), `connect`
   returns at once without signing in or opening a session, since the sign-in is what starts the
   server and a connection opened for nothing (a pool refilling) must not start it. The first call
-  that does work (a statement, `prepare`, metadata, an ingest, `setOptions`, `setAutocommit`,
-  `commit`/`rollback`, `getSession`) signs in, opens the session and waits for the server to
-  start as above; calls made at once share that sign-in. Until then `sessionId` is `""`, reading
-  the connection's properties sends nothing, and `close()` sends nothing. A wrong password or an
+  that does work (a statement, `prepare`, metadata, an ingest, `getSession`) signs in, opens the
+  session and waits for the server to start as above; calls made at once share that sign-in.
+  Until then `sessionId` is `""`, and reading the connection's properties, `close()`, and
+  `commit()`/`rollback()` of the empty transaction send nothing. Session options set before that
+  (`setOptions`, `setAutocommit`, or `catalog`, `schema` and `sessionOptions` such as a
+  `session_tag` at connect) are not work either: they are kept, sent with the session's creation
+  or right after it, before the first call, and an option the server refuses is that call's error.
+  Every `connect` reads discovery again (which never starts a server), so whether it is lazy is
+  decided for each connection. A wrong password or an
   unreachable server is that first call's error, the same one `connect` would have given. Without
   `state` (a server that is serving), `connect` signs in and opens the session as before.
 

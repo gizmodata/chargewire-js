@@ -139,6 +139,11 @@ export class Session {
   #opened: boolean;
   /** The sign-in and session creation under way for a lazy session (ensureOpen). */
   #opening: Promise<void> | undefined;
+  /**
+   * Options set on a lazy session before it opened (setOptions never signs in): sent right after
+   * the session is created, before its first request, which a refusal fails.
+   */
+  readonly #pendingOptions = new Map<string, unknown>();
 
   private constructor(
     http: HttpClient,
@@ -186,14 +191,37 @@ export class Session {
    * request tries again.
    */
   async ensureOpen(signal?: AbortSignal): Promise<void> {
-    if (this.#opened) return;
+    if (this.#opened && this.#pendingOptions.size === 0) return;
     this.#checkOpen();
     this.#opening ??= (async () => {
-      await this.#http.authenticate(signal);
-      const doc = await create(this.#http, this.#options, signal);
-      this.#id = doc.session_id;
-      this.idleTimeoutS = doc.idle_timeout_s;
-      this.#opened = true;
+      if (!this.#opened) {
+        await this.#http.authenticate(signal);
+        const doc = await create(this.#http, this.#options, signal);
+        this.#id = doc.session_id;
+        this.idleTimeoutS = doc.idle_timeout_s;
+        this.#opened = true;
+      }
+      if (this.#pendingOptions.size === 0) return;
+      const pending = Object.fromEntries(this.#pendingOptions);
+      this.#pendingOptions.clear();
+      let result: OptionsResult;
+      try {
+        const resp = await this.#http.request({
+          method: "PATCH",
+          path: sessionPath(this.#id),
+          body: jsonBody({ options: pending }),
+          idempotent: true,
+          signal,
+        });
+        result = await decodeJSON<OptionsResult>(resp);
+      } catch (err) {
+        // Not answered: send them with the next request.
+        for (const [key, value] of Object.entries(pending))
+          if (!this.#pendingOptions.has(key)) this.#pendingOptions.set(key, value);
+        throw err;
+      }
+      const refused = this.#settled(pending, result);
+      if (refused !== undefined) throw refused; // this first request's error
     })().finally(() => {
       this.#opening = undefined;
     });
@@ -217,9 +245,10 @@ export class Session {
     return this.#replacements;
   }
 
-  /** Whether the client turned autocommit off. */
+  /** Whether the client turned autocommit off (on a lazy session: set to, before it opened). */
   get inTransaction(): boolean {
-    return this.#options["autocommit"] === false;
+    const pending = this.#pendingOptions.has("autocommit");
+    return (pending ? this.#pendingOptions.get("autocommit") : this.#options["autocommit"]) === false;
   }
 
   /** Records SQL sent to session `sessionId` (a statement, or a statement prepared there). */
@@ -396,6 +425,13 @@ export class Session {
 
   /** Sets session options (§5.3), remembering the ones the server took so a replacement gets them. */
   async setOptions(options: Record<string, unknown>, signal?: AbortSignal): Promise<Record<string, unknown>> {
+    this.#checkOpen();
+    if (!this.#opened && this.#opening !== undefined) await this.#opening.catch(() => {});
+    if (!this.#opened) {
+      // A lazy session that hasn't opened: setting options is not work, so it never signs in.
+      for (const [key, value] of Object.entries(options)) this.#pendingOptions.set(key, value);
+      return { ...this.#options, ...Object.fromEntries(this.#pendingOptions) };
+    }
     const body = jsonBody({ options });
     const resp = await this.do(
       "session",
@@ -404,6 +440,13 @@ export class Session {
       signal,
     );
     const result = await decodeJSON<OptionsResult>(resp);
+    const refused = this.#settled(options, result);
+    if (refused !== undefined) throw refused;
+    return result.options ?? {};
+  }
+
+  /** Records the options the server took; returns the error for the first one it refused. */
+  #settled(options: Record<string, unknown>, result: OptionsResult): ChargewireError | undefined {
     const errors = result.errors ?? {};
     for (const [key, value] of Object.entries(options)) {
       if (!Object.hasOwn(errors, key)) this.#options[key] = value;
@@ -416,9 +459,9 @@ export class Session {
     if (refused.length > 0) {
       const key = refused[0]!;
       const problem = problemError(errors[key], { status: 400 });
-      throw problem.with({ message: `session option ${JSON.stringify(key)}: ${problem.message}` });
+      return problem.with({ message: `session option ${JSON.stringify(key)}: ${problem.message}` });
     }
-    return result.options ?? {};
+    return undefined;
   }
 
   /**
@@ -456,7 +499,8 @@ export class Session {
    * replacement, as for a lost session, and deletes the old one.
    */
   async tidyTransaction(rollback: boolean): Promise<void> {
-    if (this.#closed || !this.#opened) return;
+    if (this.#closed) return;
+    if (!this.#opened) return this.#autocommitOn(); // a lazy session: nothing was sent
     const id = this.#id;
     const send = (req: Omit<HttpRequest, "resume" | "renew" | "signal">): Promise<Response> =>
       this.#http.request({ ...req, resume: false, renew: false, signal: AbortSignal.timeout(tidyTimeoutMs) });
@@ -507,6 +551,7 @@ export class Session {
   }
 
   #autocommitOn(): void {
+    this.#pendingOptions.delete("autocommit");
     this.#options["autocommit"] = true;
   }
 
@@ -521,7 +566,9 @@ export class Session {
 
   async #endTransaction(action: "commit" | "rollback", signal: AbortSignal | undefined): Promise<void> {
     this.#checkOpen();
-    await this.ensureOpen(signal); // a transaction call is work: a lazy session opens for it
+    // Before a lazy session opened, nothing ran: the transaction is empty, and ending it is not work.
+    if (!this.#opened && this.#opening === undefined) return;
+    await this.ensureOpen(signal);
     const id = this.#id;
     const resp = await this.doHandle(id, "open transaction", {
       method: "POST",

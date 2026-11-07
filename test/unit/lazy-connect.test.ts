@@ -135,29 +135,100 @@ describe("lazy connect to a stopped server (§11.2)", () => {
     await conn.close();
   });
 
-  test("statements sent at once share one sign-in and one session; a session option is work too", async () => {
+  test("statements sent at once share one sign-in and one session", async () => {
     const server = stopped();
-    server.on("PATCH", /^\/chargewire\/v1\/sessions\/[^/]+$/, (req) =>
-      json(200, { options: (JSON.parse(req.body) as { options: unknown }).options }),
-    );
     const conn = await open(server);
     expect(await Promise.all([conn.execute("UPDATE t SET x = 1"), conn.execute("UPDATE t SET x = 2")])).toEqual([3, 3]);
     expect(server.tokens).toBe(1);
     expect(server.sessions).toBe(1);
     await conn.close();
-    const other = stopped();
-    other.on("PATCH", /^\/chargewire\/v1\/sessions\/[^/]+$/, (req) =>
-      json(200, { options: (JSON.parse(req.body) as { options: unknown }).options }),
+  });
+
+  test("session options, tags, autocommit and an empty commit before the first request send nothing; then they go first", async () => {
+    const server = stopped();
+    server.on("PATCH", /^\/chargewire\/v1\/sessions\/[^/]+$/, (req) =>
+      json(200, { options: (JSON.parse(req.body) as { options: unknown }).options, errors: {} }),
     );
-    const conn2 = await open(other);
-    await conn2.setOptions({ schema: "main" });
-    expect(sent(other)).toEqual([
+    server.on("POST", /\/(commit|rollback)$/, () => new Response(null, { status: 204 }));
+    // A pool-style connect: options and a session tag given at connect, more set right after.
+    const conn = await open(server, { catalog: "lake", sessionOptions: { session_tag: { app: "pool" } } });
+    expect(await conn.setOptions({ schema: "analytics" })).toMatchObject({ catalog: "lake", schema: "analytics" });
+    await conn.setAutocommit(false);
+    await conn.commit(); // nothing ran: an empty transaction
+    await conn.rollback();
+    expect(sent(server)).toEqual(["GET /chargewire"]);
+    // The first statement: sign-in, the session with the connect-time options, the rest, the statement.
+    expect(await conn.execute("UPDATE t SET x = 1")).toBe(3);
+    expect(sent(server)).toEqual([
       "GET /chargewire",
       "POST /chargewire/v1/auth/token",
       "POST /chargewire/v1/sessions",
       "PATCH /chargewire/v1/sessions/s1",
+      "POST /chargewire/v1/sessions/s1/statements",
+      "DELETE /chargewire/v1/sessions/s1/statements/q1",
     ]);
-    await conn2.close();
+    const create = server.requests.find((r) => r.url.pathname === "/chargewire/v1/sessions")!;
+    expect(JSON.parse(create.body)).toEqual({ options: { session_tag: { app: "pool" }, catalog: "lake" } });
+    const patch = server.requests.find((r) => r.method === "PATCH")!;
+    expect(JSON.parse(patch.body)).toEqual({ options: { schema: "analytics", autocommit: false } });
+    await conn.commit(); // now a real one
+    expect(server.count("POST", /\/commit$/)).toBe(1);
+    await conn.close();
+  });
+
+  test("an option the server refuses fails the first request; the next one runs", async () => {
+    const server = stopped();
+    server.on("PATCH", /^\/chargewire\/v1\/sessions\/[^/]+$/, () =>
+      json(200, {
+        options: {},
+        errors: { schema: { code: "invalid_option_value", detail: "schema 'nope' does not exist" } },
+      }),
+    );
+    const conn = await open(server);
+    await conn.setOptions({ schema: "nope" });
+    expect(sent(server)).toEqual(["GET /chargewire"]);
+    const err = (await conn.execute("UPDATE t SET x = 1").catch((e: unknown) => e)) as ChargewireError;
+    expect(err).toBeInstanceOf(ChargewireError);
+    expect(err.code).toBe("invalid_option_value");
+    expect(err.message).toContain('session option "schema"');
+    expect(server.count("POST", /\/statements$/)).toBe(0);
+    expect(await conn.execute("UPDATE t SET x = 1")).toBe(3);
+    expect(server.count("PATCH", /\/sessions\/s1$/)).toBe(1);
+    await conn.close();
+  });
+
+  test("transaction() whose work sends nothing sends nothing", async () => {
+    const server = stopped();
+    const conn = await open(server);
+    expect(await conn.transaction(async () => 7)).toBe(7);
+    expect(sent(server)).toEqual(["GET /chargewire"]);
+    // Autocommit is back on: the first statement opens a session with nothing else to set.
+    expect(await conn.execute("UPDATE t SET x = 1")).toBe(3);
+    expect(server.count("PATCH", /\/sessions\//)).toBe(0);
+    await conn.close();
+  });
+
+  test("each connect reads discovery again: one made after the server stopped is lazy", async () => {
+    const server = stopped(null); // serving
+    const first = await open(server);
+    expect(server.tokens).toBe(1);
+    expect(first.sessionId).toBe("s1");
+    // The server is stopped now (its stand-in answers), and the pool opens another connection.
+    server.on("GET", /^\/chargewire$/, () =>
+      json(200, {
+        protocol: "chargewire",
+        protocol_versions: ["1"],
+        capabilities: server.capabilities,
+        auth: { grant_types: ["password"] },
+        state: "stopped",
+      }),
+    );
+    const before = server.requests.length;
+    const second = await open(server);
+    expect(sent(server).slice(before)).toEqual(["GET /chargewire"]);
+    expect(second.sessionId).toBe("");
+    await second.close();
+    await first.close();
   });
 
   for (const state of [null, "serving", "some_future_state"]) {
