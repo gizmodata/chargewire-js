@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [2.3.2] - 2026-11-07
+
 ### Fixed
 
 - `transaction()`'s clean-up (the rollback after an error, and turning autocommit back on) no
