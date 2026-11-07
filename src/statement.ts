@@ -218,17 +218,18 @@ export class Execution {
     return `${sessionPath(this.sessionId!)}/statements/${encodeURIComponent(this.statementId!)}`;
   }
 
-  /** Reads the statement document (§6.3); a positive wait long-polls. */
-  async status(waitS: number, signal: AbortSignal = this.signal): Promise<StatementDocument> {
+  /**
+   * Reads the statement document (§6.3); a positive wait long-polls. `observe`: only to report
+   * progress, so it never signs in, opens a session or waits for a resuming server (a refusal is
+   * the error, which observers ignore).
+   */
+  async status(waitS: number, signal: AbortSignal = this.signal, observe = false): Promise<StatementDocument> {
     const headers: Record<string, string> = {};
     if (waitS > 0 && this.core.has(Capability.longPoll)) headers["Prefer"] = `wait=${waitS}`;
-    const resp = await this.core.session.doHandle(this.sessionId!, "statement", {
-      method: "GET",
-      path: this.#statementPath(),
-      headers,
-      idempotent: true,
-      signal,
-    });
+    const req = { method: "GET", path: this.#statementPath(), headers, idempotent: true, signal } as const;
+    const resp = observe
+      ? await this.core.http.request({ ...req, resume: false, renew: false })
+      : await this.core.session.doHandle(this.sessionId!, "statement", req);
     return (this.document = await decodeStatement(resp));
   }
 
@@ -255,7 +256,7 @@ export class Execution {
       while (!signal.aborted) {
         await sleep(250, signal);
         try {
-          const doc = await this.status(0, AbortSignal.any([signal, AbortSignal.timeout(1500)]));
+          const doc = await this.status(0, AbortSignal.any([signal, AbortSignal.timeout(1500)]), true);
           if (signal.aborted) return;
           this.report(doc);
           if (isTerminal(doc.state)) return;
@@ -667,7 +668,7 @@ function ending(exec: Execution, source: BatchSource): BatchSource {
         if (result.done) {
           if (exec.settings.onProgress) {
             try {
-              exec.report(await exec.status(0, AbortSignal.any([exec.signal, AbortSignal.timeout(1500)])));
+              exec.report(await exec.status(0, AbortSignal.any([exec.signal, AbortSignal.timeout(1500)]), true));
             } catch {
               /* best effort */
             }

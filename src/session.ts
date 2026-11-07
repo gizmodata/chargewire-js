@@ -19,6 +19,9 @@ import { type OptionsResult, type SessionDocument, transactionState } from "./pr
  */
 export type Scope = "session" | "statement" | "handle";
 
+/** The longest a request that only tidies up (a clean-up, an observation) may take. */
+export const tidyTimeoutMs = 10_000;
+
 export function sessionPath(id: string): string {
   return "/v1/sessions/" + encodeURIComponent(id);
 }
@@ -125,6 +128,11 @@ export class Session {
   readonly #searchPathIn = new Set<string>();
   /** The sessions in which SQL ran that changed other session state (`SET`, `RESET`, `PRAGMA`). */
   readonly #settingsIn = new Set<string>();
+  /**
+   * Sessions the client gave up on because a clean-up could not reach them (tidyTransaction):
+   * the next request treats each as lost, with this error, and opens a replacement.
+   */
+  readonly #abandoned = new Map<string, ChargewireError>();
   /** The idle timeout the server announced. */
   idleTimeoutS: number | undefined;
 
@@ -227,6 +235,19 @@ export class Session {
         await this.#http.renewToken(tokenUsed);
       }
       const doc = await create(this.#http, this.#options);
+      if (this.#abandoned.has(failedId)) {
+        // Signed in again now: end the session given up on, and whatever it still held.
+        void this.#http
+          .void({
+            method: "DELETE",
+            path: sessionPath(failedId),
+            idempotent: true,
+            resume: false,
+            renew: false,
+            signal: AbortSignal.timeout(tidyTimeoutMs),
+          })
+          .catch(() => {});
+      }
       this.#id = doc.session_id;
       this.idleTimeoutS = doc.idle_timeout_s;
       this.#replacements++;
@@ -251,7 +272,9 @@ export class Session {
     const id = this.#id;
     const req = build(id);
     const tokenUsed = this.#http.currentToken;
+    const abandoned = this.#abandoned.get(id);
     try {
+      if (abandoned !== undefined) throw abandoned; // never sent: the session was given up
       return await this.#http.request(req);
     } catch (err) {
       if (!isSessionLost(err, this.#http.canRenew)) throw err;
@@ -275,7 +298,7 @@ export class Session {
       // the next statement would.
       const lostTransactionWhat = this.transactionLost(id, err);
       if (lostTransactionWhat !== "") throw sessionLostError(err, id, newId, lostTransactionWhat);
-      if (req.body?.stream !== undefined) {
+      if (abandoned === undefined && req.body?.stream !== undefined) {
         throw sessionLostError(err, id, newId, "upload (it streamed, so it cannot be sent again)");
       }
       try {
@@ -293,6 +316,8 @@ export class Session {
     this.#checkOpen();
     const tokenUsed = this.#http.currentToken;
     try {
+      const abandoned = this.#abandoned.get(sessionId);
+      if (abandoned !== undefined) throw abandoned;
       return await this.#http.request(req);
     } catch (err) {
       if (!isSessionLost(err, this.#http.canRenew)) throw err;
@@ -368,6 +393,70 @@ export class Session {
       if (ChargewireError.is(err, ErrorCode.sessionNotFound, ErrorCode.serverResuming, ErrorCode.invalidToken)) return;
       throw err;
     }
+  }
+
+  /**
+   * `transaction()`'s clean-up: rolls the transaction back (`rollback`) and turns autocommit
+   * back on. Never signs in, never opens a session and never waits for a resuming server: it
+   * goes with the token the client has, for at most `tidyTimeoutMs` per request. Never fails.
+   * A session the server no longer has (or a stopped server) is gone with its transaction. When
+   * the clean-up can't tell (the token was refused, no answer), the session may still hold the
+   * transaction or autocommit off, so the client gives it up: the next request opens a
+   * replacement, as for a lost session, and deletes the old one.
+   */
+  async tidyTransaction(rollback: boolean): Promise<void> {
+    if (this.#closed) return;
+    const id = this.#id;
+    const send = (req: Omit<HttpRequest, "resume" | "renew" | "signal">): Promise<Response> =>
+      this.#http.request({ ...req, resume: false, renew: false, signal: AbortSignal.timeout(tidyTimeoutMs) });
+    const gone = (err: unknown): boolean =>
+      ChargewireError.is(err, ErrorCode.sessionNotFound, ErrorCode.sessionEnded, ErrorCode.serverResuming);
+    let unsure: unknown;
+    if (rollback) {
+      try {
+        await discard(await send({ method: "POST", path: `${sessionPath(id)}/rollback`, idempotent: false }));
+      } catch (err) {
+        if (gone(err)) return this.#autocommitOn();
+        // A refusal about the request (no transaction open) leaves the session as it was.
+        if (!(err instanceof ChargewireError) || err.status === undefined || err.status === 401 || err.status >= 500)
+          unsure = err;
+      }
+    }
+    if (unsure === undefined) {
+      try {
+        const resp = await send({
+          method: "PATCH",
+          path: sessionPath(id),
+          body: jsonBody({ options: { autocommit: true } }),
+          idempotent: true,
+        });
+        const result = await decodeJSON<OptionsResult>(resp);
+        if (!Object.hasOwn(result.errors ?? {}, "autocommit")) return this.#autocommitOn();
+        unsure = problemError(result.errors?.["autocommit"], { status: 400 });
+      } catch (err) {
+        if (gone(err)) return this.#autocommitOn();
+        unsure = err;
+      }
+    }
+    // Don't send anything more to it: autocommit on with a transaction still open would commit it.
+    this.#autocommitOn();
+    const cause = unsure instanceof ChargewireError ? unsure.message : String(unsure);
+    this.#abandoned.set(
+      id,
+      new ChargewireError({
+        code: ErrorCode.sessionNotFound,
+        message: `the client gave up the session: ending its transaction did not reach the server (${cause})`,
+        cause: unsure,
+      }),
+    );
+    this.#http.logger.warn?.("transaction clean-up could not reach the server; the next request opens a new session", {
+      session: id,
+      cause,
+    });
+  }
+
+  #autocommitOn(): void {
+    this.#options["autocommit"] = true;
   }
 
   /** Ends the current transaction (§5.5). Never retried: a commit whose answer was lost may have happened. */

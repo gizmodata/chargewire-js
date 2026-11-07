@@ -690,19 +690,29 @@ export class Connection {
 
   /**
    * Runs `work` in a transaction: commits when it resolves, rolls back when it throws, and
-   * turns autocommit back on either way.
+   * turns autocommit back on either way. That clean-up never signs in or opens a session, so
+   * it can't start a server that was stopped meanwhile (§11.2); when it can't reach the
+   * session, the next call opens a new one. The error `work` or the commit threw is the error.
    */
   async transaction<T>(work: (conn: this) => Promise<T>): Promise<T> {
     await this.setAutocommit(false);
+    let failed = false;
     try {
       const result = await work(this);
       await this.commit();
       return result;
     } catch (err) {
-      await this.rollback().catch(() => {});
+      failed = true;
       throw err;
     } finally {
-      if (!this.closed) await this.setAutocommit(true).catch(() => {});
+      if (!this.closed) {
+        try {
+          await this.#core.settle();
+        } catch {
+          // Unread results that could not be read: the clean-up goes on.
+        }
+        await this.#core.session.tidyTransaction(failed);
+      }
     }
   }
 
