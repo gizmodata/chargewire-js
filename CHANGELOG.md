@@ -6,6 +6,18 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [2.3.4] - 2026-11-07
+
+### Changed
+
+- Lazy connect: setting session options before the first request is not work. `setOptions` and
+  `setAutocommit` on a connection made to a stopped server are kept and sent right after the
+  session is created, before the first call (options given to `connect`, a `session_tag`
+  included, go with the creation as before), so they no longer sign in and start the server. An
+  option the server refuses is that first call's error, with the message `setOptions` gives, and
+  the next call runs. `commit()` and `rollback()` before the first call end an empty transaction
+  and send nothing, so `transaction()` whose work sends nothing sends nothing.
+
 ## [2.3.3] - 2026-11-07
 
 ### Added
