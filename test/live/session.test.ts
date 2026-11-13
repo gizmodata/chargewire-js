@@ -2,8 +2,9 @@
 
 import { describe, expect, test } from "vitest";
 
-import { ErrorCode, type SessionEndedReason } from "../../src/index.js";
-import { expectCode, open, scalar, sleep, within } from "./helpers.js";
+import { type ConnectOptions, type Connection, ErrorCode, type SessionEndedReason } from "../../src/index.js";
+import { killSession } from "./harness.js";
+import { discoveryStopped, expectCode, open, openUnmanaged, scalar, shared, sleep, where, within } from "./helpers.js";
 
 describe("transactions (§5.5)", () => {
   test("transaction() commits when the work resolves", async () => {
@@ -112,6 +113,73 @@ describe("a transaction left idle (§5.6, §5.7)", () => {
     expect(await conn.transactionState()).toBe("none");
     expect(await conn.execute("INSERT INTO tx_idle VALUES (3)")).toBe(1);
     expect(await scalar(watcher, "SELECT count(*) FROM tx_idle")).toBe(1);
+  });
+});
+
+describe("the current catalog and schema (§5.3)", () => {
+  // The schema is looked up in the catalog given with it, whichever key comes first: the client
+  // sends both in one options document, which the server applies catalog first. A client that
+  // sent them one by one in an order that varies (a hash map's) would mostly fail here, so this
+  // runs 40 times, as a single run of such a bug mostly passes.
+  test("a catalog and a schema given together name that catalog's schema, whichever comes first (40 times)", async () => {
+    const setup = await open();
+    await setup.execute(
+      "ATTACH IF NOT EXISTS ':memory:' AS both_cat; CREATE SCHEMA IF NOT EXISTS both_cat.both_only_here",
+    );
+    const want = "both_cat.both_only_here";
+    // The twin: alone, the schema is looked up in the default catalog, which has none of that name.
+    const alone = await expectCode(open({ schema: "both_only_here" }), ErrorCode.invalidOptionValue);
+    expect(alone.message).toContain("both_only_here");
+    const forms: Array<[string, Partial<ConnectOptions>]> = [
+      ["connect: catalog, schema", { catalog: "both_cat", schema: "both_only_here" }],
+      ["connect: sessionOptions, schema first", { sessionOptions: { schema: "both_only_here", catalog: "both_cat" } }],
+      [
+        "connect: schema, catalog in sessionOptions",
+        { schema: "both_only_here", sessionOptions: { catalog: "both_cat" } },
+      ],
+    ];
+    const landed: Record<string, number> = {};
+    /** Counts where a connection made with `options` is after `steps`, or the error. */
+    const note = async (
+      form: string,
+      options: Partial<ConnectOptions>,
+      steps: (conn: Connection) => Promise<void> = async () => {},
+    ): Promise<void> => {
+      let at: string;
+      try {
+        const conn = await openUnmanaged(options);
+        try {
+          await steps(conn);
+          at = await where(conn);
+        } finally {
+          await conn.close();
+        }
+      } catch (err) {
+        at = `error: ${String(err).replace(/, request \w+/u, "")}`; // without its request id, so equal errors count as one
+      }
+      landed[`${form} -> ${at}`] = (landed[`${form} -> ${at}`] ?? 0) + 1;
+    };
+    const both = { schema: "both_only_here", catalog: "both_cat" };
+    for (let i = 0; i < 40; i++) {
+      for (const [form, options] of forms) {
+        await note(form, options);
+        // A lazy connection sends them when its first request opens the session.
+        await note(`lazy ${form}`, { ...options, fetch: discoveryStopped });
+      }
+      const set = async (conn: Connection): Promise<void> => {
+        await conn.setOptions(both);
+      };
+      await note("setOptions: schema first", {}, set);
+      await note("setOptions: schema first, replayed on a replacement session", {}, async (conn) => {
+        await conn.setOptions(both);
+        await killSession(shared, conn.sessionId);
+      });
+      await note("lazy setOptions: schema first", { fetch: discoveryStopped }, set);
+    }
+    const names = forms.flatMap(([form]) => [form, `lazy ${form}`]);
+    names.push("setOptions: schema first", "setOptions: schema first, replayed on a replacement session");
+    names.push("lazy setOptions: schema first");
+    expect(landed).toEqual(Object.fromEntries(names.map((form) => [`${form} -> ${want}`, 40])));
   });
 });
 

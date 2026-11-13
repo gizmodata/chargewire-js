@@ -176,6 +176,66 @@ describe("lazy connect to a stopped server (§11.2)", () => {
     await conn.close();
   });
 
+  // A session that isn't open yet keeps the order of what was set on it, like an open one: the
+  // catalog set after the schema moves to that catalog's default schema, so the schema is not sent
+  // when the session opens, and not replayed on a replacement; set after the catalog, it is.
+  for (const tc of [
+    {
+      name: "the schema, then the catalog",
+      connect: {},
+      sets: [{ schema: "raw" }, { catalog: "pond" }],
+      created: {},
+      patched: { catalog: "pond" },
+    },
+    {
+      name: "the catalog, then the schema",
+      connect: {},
+      sets: [{ catalog: "pond" }, { schema: "raw" }],
+      created: {},
+      patched: { catalog: "pond", schema: "raw" },
+    },
+    {
+      name: "a catalog and a schema, then another catalog",
+      connect: {},
+      sets: [{ catalog: "lake", schema: "raw" }, { catalog: "pond" }],
+      created: {},
+      patched: { catalog: "pond" },
+    },
+    {
+      name: "a schema given to connect, then the catalog",
+      connect: { schema: "raw" },
+      sets: [{ catalog: "pond" }],
+      created: { schema: "raw" },
+      patched: { catalog: "pond" },
+    },
+  ]) {
+    test(`options set before the first request keep their order: ${tc.name}`, async () => {
+      const server = stopped();
+      server.on("PATCH", /^\/chargewire\/v1\/sessions\/[^/]+$/, (req) =>
+        json(200, { options: (JSON.parse(req.body) as { options: unknown }).options, errors: {} }),
+      );
+      const conn = await open(server, tc.connect);
+      let remembered: Record<string, unknown> = {};
+      for (const options of tc.sets) remembered = await conn.setOptions(options);
+      expect(remembered).toEqual(tc.patched); // what setOptions says is set, before anything is sent
+      expect(sent(server)).toEqual(["GET /chargewire"]);
+      expect(await conn.execute("UPDATE t SET x = 1")).toBe(3);
+      const creates = (): unknown[] =>
+        server.requests
+          .filter((r) => r.method === "POST" && r.url.pathname === "/chargewire/v1/sessions")
+          .map((r) => JSON.parse(r.body) as unknown);
+      expect(creates()).toEqual([{ options: tc.created }]);
+      const patches = server.requests.filter((r) => r.method === "PATCH");
+      expect(patches.map((r) => JSON.parse(r.body) as unknown)).toEqual([{ options: tc.patched }]);
+      // The session is lost: its replacement opens where it was.
+      server.on("POST", /\/sessions\/s1\/statements$/, () => problem(404, "session_not_found"));
+      expect(await conn.execute("UPDATE t SET x = 2")).toBe(3);
+      expect(conn.sessionReplacements).toBe(1);
+      expect(creates()).toEqual([{ options: tc.created }, { options: tc.patched }]);
+      await conn.close();
+    });
+  }
+
   test("an option the server refuses fails the first request; the next one runs", async () => {
     const server = stopped();
     server.on("PATCH", /^\/chargewire\/v1\/sessions\/[^/]+$/, () =>

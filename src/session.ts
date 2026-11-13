@@ -110,9 +110,23 @@ export function sessionLostError(
 }
 
 /**
+ * Whether setting `options` leaves the session in the catalog's default schema: the catalog is
+ * among them, without a schema (`refused`: the options the server did not take, which count as
+ * not given). Setting the catalog moves the session to that catalog's default schema, as SQL `USE`
+ * does, so a schema remembered from before must be forgotten: replayed with the catalog, it would
+ * open a replacement session in a schema of that name in the new catalog instead of where the lost
+ * session was, or fail every replacement when the new catalog has no such schema.
+ */
+function movesToDefaultSchema(options: Record<string, unknown>, refused: Record<string, unknown> = {}): boolean {
+  const took = (key: string): boolean => Object.hasOwn(options, key) && !Object.hasOwn(refused, key);
+  return took("catalog") && !took("schema");
+}
+
+/**
  * A server session (§5) and the options the client set on it. When the server reports
  * the session gone, a replacement is opened with the same options (when allowed) and
- * the loss is reported, not hidden.
+ * the loss is reported, not hidden. The options are remembered in the order they were set,
+ * so the replacement opens where the lost session was (movesToDefaultSchema).
  */
 export class Session {
   readonly #http: HttpClient;
@@ -423,14 +437,24 @@ export class Session {
     return { ...doc, transaction: transactionState(doc.transaction) };
   }
 
-  /** Sets session options (§5.3), remembering the ones the server took so a replacement gets them. */
+  /**
+   * Sets session options (§5.3), remembering the ones the server took so a replacement gets them.
+   * Setting the catalog without a schema forgets the schema remembered from before
+   * (movesToDefaultSchema), on an open session and on a lazy one that hasn't opened.
+   */
   async setOptions(options: Record<string, unknown>, signal?: AbortSignal): Promise<Record<string, unknown>> {
     this.#checkOpen();
     if (!this.#opened && this.#opening !== undefined) await this.#opening.catch(() => {});
     if (!this.#opened) {
       // A lazy session that hasn't opened: setting options is not work, so it never signs in.
+      // Kept in the order they were set, like an open session's: the catalog set after the schema
+      // moves to the catalog's default schema, so that schema is not sent when the session opens.
       for (const [key, value] of Object.entries(options)) this.#pendingOptions.set(key, value);
-      return { ...this.#options, ...Object.fromEntries(this.#pendingOptions) };
+      if (movesToDefaultSchema(options)) this.#pendingOptions.delete("schema");
+      const set = { ...this.#options, ...Object.fromEntries(this.#pendingOptions) };
+      // A schema the session is created with (given to connect) is gone once the catalog is set.
+      if (movesToDefaultSchema(Object.fromEntries(this.#pendingOptions))) delete set["schema"];
+      return set;
     }
     const body = jsonBody({ options });
     const resp = await this.do(
@@ -451,6 +475,9 @@ export class Session {
     for (const [key, value] of Object.entries(options)) {
       if (!Object.hasOwn(errors, key)) this.#options[key] = value;
     }
+    // The catalog set without a schema: the session is now in that catalog's default schema, and
+    // so must its replacement be. The schema set before is not replayed.
+    if (movesToDefaultSchema(options, errors)) delete this.#options["schema"];
     // Catalog and schema set as options now decide the search path, and a replacement gets them:
     // a USE before this is restored.
     const set = (key: string): boolean => Object.hasOwn(options, key) && !Object.hasOwn(errors, key);

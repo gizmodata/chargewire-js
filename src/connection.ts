@@ -654,7 +654,11 @@ export class Connection {
     return answer.rows_ingested;
   }
 
-  /** Sets session options (§5.3); the client replays them on a replacement session. */
+  /**
+   * Sets session options (§5.3); the client replays them on a replacement session. Setting
+   * `catalog` without `schema` moves the session to that catalog's default schema, as SQL `USE`
+   * does, so a schema set before is no longer replayed: pass both to name a schema in the catalog.
+   */
   async setOptions(
     sessionOptions: Record<string, unknown>,
     options: { signal?: AbortSignal } = {},
