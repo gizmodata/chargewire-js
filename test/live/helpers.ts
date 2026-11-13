@@ -75,6 +75,28 @@ export async function scalar(conn: Connection, sql: string): Promise<number> {
   return Number(table.getChildAt(0)!.get(0));
 }
 
+/** Where the connection's session is: its current catalog and schema, as the server's SQL sees them. */
+export async function where(conn: Connection): Promise<string> {
+  const table = await conn.query("SELECT current_catalog() || '.' || current_schema() AS location");
+  return String(table.getChildAt(0)!.get(0));
+}
+
+/**
+ * A `fetch` for `connect` that makes the server's discovery document say `"state": "stopped"`,
+ * as a stand-in answering for a stopped server does (§3.1, §11.2): the connection is lazy, and
+ * everything after discovery reaches the real server unchanged.
+ */
+export const discoveryStopped: typeof fetch = async (input, init) => {
+  const resp = await fetch(input, init);
+  const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+  if ((init?.method ?? "GET") !== "GET" || url.pathname !== "/chargewire" || !resp.ok) return resp;
+  const discovery = (await resp.json()) as Record<string, unknown>;
+  return new Response(JSON.stringify({ ...discovery, state: "stopped" }), {
+    status: resp.status,
+    headers: { "content-type": "application/json" },
+  });
+};
+
 /** The session answers a trivial query soon: proof a statement the test stopped really stopped. */
 export async function expectSessionUsable(conn: Connection, withinMs = 15_000): Promise<void> {
   const started = Date.now();

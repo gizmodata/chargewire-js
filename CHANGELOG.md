@@ -6,6 +6,32 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Fixed
+
+- A session that replaces a lost one opens where the lost one was, after the current schema and
+  then the current catalog were set on a connection (`setOptions({ schema: "raw" })`, or `schema`
+  given to `connect`, then `setOptions({ catalog: "lake" })`). Setting the catalog moves the
+  session to that catalog's default schema, as SQL `USE` does, but the client still remembered
+  the schema and replayed both. The replacement opened in `lake.raw` when `lake` has a schema of
+  that name, so later statements ran in another schema than before the loss, without an error.
+  When it has none, no replacement could be opened: every request from then on failed
+  (`opening a replacement failed: … No catalog + schema named "lake.raw" found`) and the
+  connection was unusable. Every release since 1.0.0 did this. The client now forgets the schema
+  when the catalog is set without one, or with a schema the server refuses (it takes the catalog
+  all the same). A catalog the server refuses changes nothing, and a schema set with the catalog
+  or after it is replayed as before.
+- A lazy connection to a stopped server (2.3.4 and 2.3.5, which keep the options set before the
+  first request) had the same fault before it opened: the schema, then the catalog, set before
+  the first request were sent together, so the session opened in `lake.raw`, or that first
+  request failed (`session option "schema": … No catalog + schema named "lake.raw" found`). The
+  options now keep the order they were set in, as on an open session, and `setOptions` returns
+  them without the forgotten schema.
+
+A catalog and a schema given together (to `connect`, in `sessionOptions`, or in one `setOptions`
+call) were never affected: they travel in one options document, and the server looks the schema
+up in the catalog given with it, whichever key comes first. A live test now connects 40 times in
+each form, lazy connections and a replacement session included, to keep it so.
+
 ## [2.3.5] - 2026-11-07
 
 ### Fixed

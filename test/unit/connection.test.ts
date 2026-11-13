@@ -458,6 +458,98 @@ describe("sessions (§5.6)", () => {
   });
 });
 
+describe("a replacement session opens where the lost one was (§5.3, §5.6)", () => {
+  // Setting the catalog moves the session to that catalog's default schema, as SQL USE does, so a
+  // schema set before it is not replayed: replayed, it would open the replacement in a schema of
+  // that name in the new catalog, or fail every replacement when the new catalog has none. A
+  // schema set with the catalog, or after it, is replayed.
+  interface Case {
+    name: string;
+    connect?: Record<string, unknown>;
+    sets: Array<Record<string, unknown>>;
+    /** The option the server refuses in the last of `sets` (its value is "nope"). */
+    refused?: string;
+    replayed: Record<string, unknown>;
+  }
+  const cases: Case[] = [
+    {
+      name: "the schema, then the catalog",
+      sets: [{ schema: "raw" }, { catalog: "pond" }],
+      replayed: { catalog: "pond" },
+    },
+    {
+      name: "the catalog, then the schema",
+      sets: [{ catalog: "pond" }, { schema: "raw" }],
+      replayed: { catalog: "pond", schema: "raw" },
+    },
+    {
+      name: "both at once, after another schema",
+      sets: [{ schema: "old" }, { schema: "raw", catalog: "pond" }],
+      replayed: { catalog: "pond", schema: "raw" },
+    },
+    {
+      name: "the schema, then another option",
+      connect: { catalog: "lake" },
+      sets: [{ schema: "raw" }, { time_zone: "UTC" }],
+      replayed: { catalog: "lake", schema: "raw", time_zone: "UTC" },
+    },
+    {
+      name: "a schema given to connect, then the catalog",
+      connect: { schema: "raw" },
+      sets: [{ catalog: "pond" }],
+      replayed: { catalog: "pond" },
+    },
+    {
+      name: "the catalog the session is already in",
+      connect: { catalog: "pond", schema: "raw" },
+      sets: [{ catalog: "pond" }],
+      replayed: { catalog: "pond" },
+    },
+    {
+      name: "a catalog the server refuses leaves what is replayed as it was",
+      sets: [{ schema: "raw" }, { catalog: "nope" }],
+      refused: "catalog",
+      replayed: { schema: "raw" },
+    },
+    {
+      name: "the catalog with a schema the server refuses",
+      sets: [{ schema: "raw" }, { catalog: "pond", schema: "nope" }],
+      refused: "schema",
+      replayed: { catalog: "pond" },
+    },
+  ];
+  for (const tc of cases) {
+    test(tc.name, async () => {
+      const server = new FakeServer();
+      server.on("PATCH", /\/sessions\/s1$/, (req) => {
+        const { options } = JSON.parse(req.body) as { options: Record<string, unknown> };
+        const errors = Object.fromEntries(
+          Object.keys(options)
+            .filter((key) => options[key] === "nope")
+            .map((key) => [key, { code: "invalid_option_value", detail: `fake: no ${key} named nope` }]),
+        );
+        return json(200, { options, errors });
+      });
+      server.on("POST", /\/sessions\/s1\/statements$/, () => problem(404, "session_not_found"));
+      server.on("POST", /\/sessions\/s2\/statements$/, () =>
+        json(200, doneDoc("q2", { kind: "update", rows_affected: 5 })),
+      );
+      const conn = await open(server, tc.connect);
+      for (const [i, options] of tc.sets.entries()) {
+        if (tc.refused !== undefined && i === tc.sets.length - 1) {
+          const err = await expectCode(conn.setOptions(options), "invalid_option_value");
+          expect(err.message).toContain(`session option "${tc.refused}": fake: no ${tc.refused} named nope`);
+        } else await conn.setOptions(options);
+      }
+      expect(await conn.execute("UPDATE t SET x = 1")).toBe(5);
+      expect(conn.sessionReplacements).toBe(1);
+      const creates = server.requests.filter((r) => r.method === "POST" && /\/v1\/sessions$/.test(r.url.pathname));
+      expect(creates.length).toBe(2);
+      expect(JSON.parse(creates[1]!.body)).toEqual({ options: tc.replayed });
+    });
+  }
+});
+
 describe("retries", () => {
   test("Retry-After is honoured for a request that is safe to repeat", async () => {
     const server = new FakeServer();

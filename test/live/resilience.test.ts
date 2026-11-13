@@ -6,11 +6,12 @@
 import { tableFromArrays } from "apache-arrow";
 import { describe, expect, test } from "vitest";
 
-import { ErrorCode } from "../../src/index.js";
+import { type ConnectOptions, ErrorCode } from "../../src/index.js";
 import { killSession, launchServer, rawToken, serverName } from "./harness.js";
 import {
   FaultProxy,
   bigQuery,
+  discoveryStopped,
   expectBig,
   expectCode,
   isPost,
@@ -21,6 +22,7 @@ import {
   scalar,
   shared,
   sleep,
+  where,
 } from "./helpers.js";
 
 const resumed = (proxy: FaultProxy) => proxy.requests((r) => isResultFetch(r) && r.query.has("from_batch"));
@@ -180,6 +182,144 @@ describe("lost sessions (§5.6)", () => {
     expect(conn.sessionReplacements).toBe(1);
     expect(conn.sessionId).not.toBe(old);
     expect((await conn.getSession()).options?.["catalog"]).toBe("replay_cat");
+  });
+
+  // The replacement opens where the lost session was. Setting the catalog moves the session to
+  // that catalog's default schema, as SQL USE does, so a schema set before the catalog is not
+  // replayed: it used to put the replacement in a schema of that name in the new catalog, or,
+  // when the new catalog has none, fail every request from then on. A catalog the server refuses
+  // leaves the session, and what is replayed, where it was.
+  describe("the replacement opens where the lost session was", () => {
+    /** The catalogs and schemas the cases use; returns the server's default catalog. */
+    const prepare = async (): Promise<string> => {
+      const setup = await open();
+      const home = (await where(setup)).split(".")[0]!;
+      await setup.execute(
+        "ATTACH IF NOT EXISTS ':memory:' AS replay_where; " +
+          "CREATE SCHEMA IF NOT EXISTS replay_both; CREATE SCHEMA IF NOT EXISTS replay_where.replay_both; " +
+          "CREATE SCHEMA IF NOT EXISTS replay_only_default",
+      );
+      return home;
+    };
+
+    interface Case {
+      name: string;
+      connect?: Partial<ConnectOptions>;
+      sets: Array<Record<string, unknown>>;
+      /** The option the server refuses in the last of `sets`, and the name its error carries. */
+      refused?: [option: string, named: string];
+      /** Where the session is, before the loss and after it; `{home}` is the default catalog. */
+      want: string;
+    }
+    const cases: Case[] = [
+      {
+        name: "a schema both catalogs have, then the catalog",
+        sets: [{ schema: "replay_both" }, { catalog: "replay_where" }],
+        want: "replay_where.main",
+      },
+      {
+        name: "a schema only the catalog before has, then the catalog",
+        sets: [{ schema: "replay_only_default" }, { catalog: "replay_where" }],
+        want: "replay_where.main",
+      },
+      {
+        name: "a schema given to connect, then the catalog",
+        connect: { schema: "replay_only_default" },
+        sets: [{ catalog: "replay_where" }],
+        want: "replay_where.main",
+      },
+      {
+        name: "the catalog the session is already in",
+        connect: { catalog: "replay_where", schema: "replay_both" },
+        sets: [{ catalog: "replay_where" }],
+        want: "replay_where.main",
+      },
+      {
+        name: "the catalog, then the schema (replayed: both)",
+        sets: [{ catalog: "replay_where" }, { schema: "replay_both" }],
+        want: "replay_where.replay_both",
+      },
+      {
+        name: "the catalog and the schema at once, after another schema (replayed: both)",
+        sets: [{ schema: "replay_only_default" }, { schema: "replay_both", catalog: "replay_where" }],
+        want: "replay_where.replay_both",
+      },
+      {
+        name: "a catalog the server refuses",
+        sets: [{ schema: "replay_both" }, { catalog: "replay_no_such_catalog" }],
+        refused: ["catalog", "replay_no_such_catalog"],
+        want: "{home}.replay_both",
+      },
+      {
+        name: "the catalog with a schema the server refuses",
+        sets: [{ schema: "replay_both" }, { catalog: "replay_where", schema: "replay_no_such_schema" }],
+        refused: ["schema", "replay_no_such_schema"],
+        want: "replay_where.main",
+      },
+    ];
+    for (const tc of cases) {
+      test(tc.name, async () => {
+        const want = tc.want.replace("{home}", await prepare());
+        const conn = await open(tc.connect);
+        for (const [i, options] of tc.sets.entries()) {
+          if (tc.refused !== undefined && i === tc.sets.length - 1) {
+            const err = await expectCode(conn.setOptions(options), ErrorCode.invalidOptionValue);
+            expect(err.message).toContain(`session option "${tc.refused[0]}"`);
+            expect(err.message).toContain(tc.refused[1]);
+          } else await conn.setOptions(options);
+        }
+        expect(await where(conn), "before the loss").toBe(want);
+        const old = conn.sessionId;
+        await killSession(shared, old);
+        expect(await scalar(conn, "SELECT 5")).toBe(5);
+        expect(conn.sessionReplacements).toBe(1);
+        expect(conn.sessionId).not.toBe(old);
+        expect(await where(conn), "the replacement session is not where the lost one was").toBe(want);
+        // And again: a second loss replays the same options.
+        await killSession(shared, conn.sessionId);
+        expect(await where(conn), "the second replacement").toBe(want);
+        expect(conn.sessionReplacements).toBe(2);
+      });
+    }
+
+    // A lazy connection (to a stopped server, §11.2) sends what was set on it when its first
+    // request opens the session: in the order it was set, like an open one.
+    const lazyCases: Case[] = [
+      {
+        name: "a schema both catalogs have, then the catalog",
+        sets: [{ schema: "replay_both" }, { catalog: "replay_where" }],
+        want: "replay_where.main",
+      },
+      {
+        name: "a schema only the catalog before has, then the catalog",
+        sets: [{ schema: "replay_only_default" }, { catalog: "replay_where" }],
+        want: "replay_where.main",
+      },
+      {
+        name: "a schema given to connect, then the catalog",
+        connect: { schema: "replay_only_default" },
+        sets: [{ catalog: "replay_where" }],
+        want: "replay_where.main",
+      },
+      {
+        name: "the catalog, then the schema (sent: both)",
+        sets: [{ catalog: "replay_where" }, { schema: "replay_both" }],
+        want: "replay_where.replay_both",
+      },
+    ];
+    for (const tc of lazyCases) {
+      test(`a lazy connection, set before its first request: ${tc.name}`, async () => {
+        await prepare();
+        const conn = await open({ ...tc.connect, fetch: discoveryStopped });
+        expect(conn.sessionId, "the connection is not lazy").toBe("");
+        for (const options of tc.sets) await conn.setOptions(options);
+        expect(conn.sessionId).toBe("");
+        expect(await where(conn), "at the first request").toBe(tc.want);
+        await killSession(shared, conn.sessionId);
+        expect(await where(conn), "the replacement session is not where the lost one was").toBe(tc.want);
+        expect(conn.sessionReplacements).toBe(1);
+      });
+    }
   });
 
   test("what did not survive is said: a temporary table is gone, and the error says the session was replaced", async () => {

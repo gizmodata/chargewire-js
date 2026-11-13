@@ -388,6 +388,8 @@ Statement options, per call or as `connect` defaults:
   (`setOptions`, `setAutocommit`, or `catalog`, `schema` and `sessionOptions` such as a
   `session_tag` at connect) are not work either: they are kept, sent with the session's creation
   or right after it, before the first call, and an option the server refuses is that call's error.
+  They keep the order they were set in, as on an open session: a `catalog` set after a `schema`
+  opens the session in that catalog's default schema (see lost sessions below).
   Every `connect` reads discovery again (which never starts a server), so whether it is lazy is
   decided for each connection. A wrong password or an
   unreachable server is that first call's error, the same one `connect` would have given. Without
@@ -431,8 +433,13 @@ Statement options, per call or as `connect` defaults:
   `idle_in_transaction`; or `session_ended` for an expired token when the client can get a new
   token, which it does first) are replaced by a new session with the options the client set, and
   the loss is reported, not hidden: a warning, `conn.sessionReplacements`, and errors from work on
-  the replacement say so. The request that found the loss runs again on the replacement only when
-  the client knows no transaction was open in the lost session (§5.7): autocommit was on, the
+  the replacement say so. The replacement opens where the lost session was: setting `catalog`
+  without `schema` moves a session to that catalog's default schema, as SQL `USE` does, so a
+  schema set before it (with `setOptions` or at `connect`) is forgotten and not replayed. To name
+  a schema in another catalog, set both in one call, or the schema after the catalog; in one call
+  the server looks the schema up in the catalog given with it, whichever key comes first. The
+  request that found the loss runs again on the replacement only when the client knows no
+  transaction was open in the lost session (§5.7): autocommit was on, the
   server did not say `idle_in_transaction` (it ended the session and rolled its transaction back),
   no SQL that can begin a transaction (`BEGIN`, `START TRANSACTION`, anything naming autocommit)
   ran there, and no statement whose first word is `USE`, `SET`, `RESET` or `PRAGMA` did (the
