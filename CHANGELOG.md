@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [2.3.6] - 2026-11-13
+
 ### Fixed
 
 - A session that replaces a lost one opens where the lost one was, after the current schema and
