@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-11-14
+
 ### Added
 
 - Server-enforced read-only sessions through `sessionOptions: { read_only: true }`
