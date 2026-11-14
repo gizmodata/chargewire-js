@@ -122,7 +122,7 @@ export class Core {
   }
 
   checkOpen(): void {
-    if (this.closed)
+    if (this.closed || this.session.closed)
       throw new ChargewireError({ code: ErrorCode.clientConnectionClosed, message: "the connection is closed" });
   }
 

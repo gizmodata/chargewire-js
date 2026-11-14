@@ -6,6 +6,15 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Added
+
+- Server-enforced read-only sessions through `sessionOptions: { read_only: true }`
+  and `setOptions({ read_only: true })`. The mode is one-way, must be confirmed by
+  the server, and is requested and confirmed again on replacement sessions. Lazy
+  connections carry it in session creation before applying other setup options.
+  An older server that rejects or ignores it causes an error; ordinary connections
+  remain compatible with older servers.
+
 ## [2.3.6] - 2026-11-13
 
 ### Fixed
