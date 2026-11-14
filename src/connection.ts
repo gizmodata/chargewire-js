@@ -511,7 +511,7 @@ export class Connection {
   }
 
   get closed(): boolean {
-    return this.#core.closed;
+    return this.#core.closed || this.#core.session.closed;
   }
 
   async #settings(options: StatementOptions): Promise<StatementSettings> {

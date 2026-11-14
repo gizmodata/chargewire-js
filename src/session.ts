@@ -1,6 +1,6 @@
 // Licensed under the Apache License, Version 2.0.
 
-import { ErrorCode, ChargewireError, problemError, protocolError } from "./errors.js";
+import { ErrorCode, ChargewireError, problemError, protocolError, invalidArgument } from "./errors.js";
 import { type HttpClient, type HttpRequest, decodeJSON, discard, jsonBody } from "./http.js";
 import { type OptionsResult, type SessionDocument, transactionState } from "./protocol.js";
 
@@ -135,6 +135,7 @@ export class Session {
   readonly #options: Record<string, unknown>;
   #replacements = 0;
   #closed = false;
+  #setting: Promise<void> = Promise.resolve();
   #replacing: { failedId: string; promise: Promise<string> } | undefined;
   /** The sessions in which SQL ran that may have opened a transaction (mayOpenTransaction). */
   readonly #maybeTransactionIn = new Set<string>();
@@ -167,6 +168,7 @@ export class Session {
   ) {
     this.#http = http;
     this.#reconnect = reconnect;
+    validateReadOnly(options);
     this.#options = options;
     this.#id = doc?.session_id ?? "";
     this.idleTimeoutS = doc?.idle_timeout_s;
@@ -181,6 +183,7 @@ export class Session {
     signal?: AbortSignal,
   ): Promise<Session> {
     const copy = { ...options };
+    validateReadOnly(copy);
     const doc = await create(http, copy, signal);
     return new Session(http, reconnect, copy, doc);
   }
@@ -205,8 +208,8 @@ export class Session {
    * request tries again.
    */
   async ensureOpen(signal?: AbortSignal): Promise<void> {
-    if (this.#opened && this.#pendingOptions.size === 0) return;
     this.#checkOpen();
+    if (this.#opened && this.#pendingOptions.size === 0) return;
     this.#opening ??= (async () => {
       if (!this.#opened) {
         await this.#http.authenticate(signal);
@@ -234,6 +237,7 @@ export class Session {
           if (!this.#pendingOptions.has(key)) this.#pendingOptions.set(key, value);
         throw err;
       }
+      await this.#confirmReadOnly(pending, result);
       const refused = this.#settled(pending, result);
       if (refused !== undefined) throw refused; // this first request's error
     })().finally(() => {
@@ -434,6 +438,7 @@ export class Session {
       signal,
     );
     const doc = await decodeJSON<SessionDocument>(resp);
+    if (doc.session_id === this.#id && doc.options?.["read_only"] === true) this.#options["read_only"] = true;
     return { ...doc, transaction: transactionState(doc.transaction) };
   }
 
@@ -443,13 +448,41 @@ export class Session {
    * (movesToDefaultSchema), on an open session and on a lazy one that hasn't opened.
    */
   async setOptions(options: Record<string, unknown>, signal?: AbortSignal): Promise<Record<string, unknown>> {
+    const copy = { ...options };
+    const result = this.#setting.then(() => this.#setOptions(copy, signal));
+    this.#setting = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  async #setOptions(options: Record<string, unknown>, signal?: AbortSignal): Promise<Record<string, unknown>> {
     this.#checkOpen();
+    validateReadOnly(options);
+    if (options["read_only"] === false && this.#options["read_only"] === true) {
+      throw new ChargewireError({
+        code: ErrorCode.readOnly,
+        message: "read-only is one-way; open another connection to write",
+      });
+    }
     if (!this.#opened && this.#opening !== undefined) await this.#opening.catch(() => {});
+    this.#checkOpen();
+    if (options["read_only"] === false && this.#options["read_only"] === true) {
+      throw new ChargewireError({
+        code: ErrorCode.readOnly,
+        message: "read-only is one-way; open another connection to write",
+      });
+    }
     if (!this.#opened) {
       // A lazy session that hasn't opened: setting options is not work, so it never signs in.
       // Kept in the order they were set, like an open session's: the catalog set after the schema
       // moves to the catalog's default schema, so that schema is not sent when the session opens.
-      for (const [key, value] of Object.entries(options)) this.#pendingOptions.set(key, value);
+      for (const [key, value] of Object.entries(options)) {
+        // Read-only must be effective at creation, before any other setup request.
+        if (key === "read_only") this.#options[key] = value;
+        else this.#pendingOptions.set(key, value);
+      }
       if (movesToDefaultSchema(options)) this.#pendingOptions.delete("schema");
       const set = { ...this.#options, ...Object.fromEntries(this.#pendingOptions) };
       // A schema the session is created with (given to connect) is gone once the catalog is set.
@@ -457,22 +490,45 @@ export class Session {
       return set;
     }
     const body = jsonBody({ options });
+    let patchedId = "";
     const resp = await this.do(
       "session",
       "",
-      (id) => ({ method: "PATCH", path: sessionPath(id), body, idempotent: true, signal }),
+      (id) => {
+        patchedId = id;
+        return { method: "PATCH", path: sessionPath(id), body, idempotent: true, signal };
+      },
       signal,
     );
     const result = await decodeJSON<OptionsResult>(resp);
+    await this.#confirmReadOnly(options, result, patchedId);
     const refused = this.#settled(options, result);
     if (refused !== undefined) throw refused;
     return result.options ?? {};
   }
 
+  async #confirmReadOnly(options: Record<string, unknown>, result: OptionsResult, patchedId = this.#id): Promise<void> {
+    if (
+      options["read_only"] === true &&
+      (patchedId !== this.#id ||
+        (result.options?.["read_only"] !== true && !Object.hasOwn(result.errors ?? {}, "read_only")))
+    ) {
+      this.#closed = true;
+      await endUnconfirmed(this.#http, this.#id);
+      throw protocolError(
+        "the server did not confirm read_only=true for the current session; the connection is closed",
+      );
+    }
+    // Record confirmation before yielding: a replacement created concurrently must confirm it too.
+    if (result.options?.["read_only"] === true) this.#options["read_only"] = true;
+  }
+
   /** Records the options the server took; returns the error for the first one it refused. */
   #settled(options: Record<string, unknown>, result: OptionsResult): ChargewireError | undefined {
     const errors = result.errors ?? {};
+    if (result.options?.["read_only"] === true) this.#options["read_only"] = true;
     for (const [key, value] of Object.entries(options)) {
+      if (key === "read_only" && this.#options[key] === true) continue;
       if (!Object.hasOwn(errors, key)) this.#options[key] = value;
     }
     // The catalog set without a schema: the session is now in that catalog's default schema, and
@@ -624,5 +680,29 @@ async function create(
   if (typeof doc.session_id !== "string" || doc.session_id === "") {
     throw protocolError("the server created a session without an id");
   }
+  if (options["read_only"] === true && doc.options?.["read_only"] !== true) {
+    await endUnconfirmed(http, doc.session_id);
+    throw protocolError("the server did not confirm read_only=true; the new session was rejected");
+  }
+  if (doc.options?.["read_only"] === true) options["read_only"] = true;
   return doc;
+}
+
+function validateReadOnly(options: Record<string, unknown>): void {
+  if (Object.hasOwn(options, "read_only") && typeof options["read_only"] !== "boolean") {
+    throw invalidArgument("read_only must be a boolean");
+  }
+}
+
+async function endUnconfirmed(http: HttpClient, id: string): Promise<void> {
+  await http
+    .void({
+      method: "DELETE",
+      path: sessionPath(id),
+      idempotent: true,
+      resume: false,
+      renew: false,
+      signal: AbortSignal.timeout(tidyTimeoutMs),
+    })
+    .catch(() => {});
 }

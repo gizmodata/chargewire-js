@@ -341,6 +341,46 @@ Statement options, per call or as `connect` defaults:
 | `resultOrder`        | `preserve`             | `any` lets a split result come back in any row order                                     |
 | `ipcCompression`     | `none`                 | `lz4_frame`, `zstd` or `auto`: compressed Arrow buffers in results (§8.2, below)         |
 
+## Read-only sessions
+
+Request server-enforced read-only mode in the session's creation options:
+
+```js
+import { connect } from "@gizmodata/chargewire";
+
+const conn = await connect({
+  url,
+  username,
+  password,
+  sessionOptions: { read_only: true },
+});
+try {
+  const table = await conn.query("SELECT 42 AS answer");
+  console.log(Number(table.getChild("answer").get(0))); // 42
+} finally {
+  await conn.close();
+}
+```
+
+Here `url`, `username`, and `password` are your server connection details. The
+server must confirm a boolean `options.read_only: true`. An older server that
+rejects or ignores the option causes an error; there is no writable fallback.
+Connections that omit the option work with older servers as before.
+
+`await conn.setOptions({ read_only: true })` requests the same restriction on an
+existing session. The server may require an active transaction to end first.
+Read-only is one-way, including before a lazy session opens; requesting `false`
+after `true` fails. Open a separate connection to write. Replacement sessions
+request and confirm the mode again, including when the server imposed it.
+
+For a lazy connection to a stopped server, `setOptions` records requested options
+without contacting the server. Its returned options describe that request, not
+server confirmation. The first operation opens and confirms the session before
+using it; `await conn.getSession()` also opens it and reports the server's mode.
+
+Read-only limits SQL writes according to the server's Chargewire implementation.
+It does not grant read permissions or sandbox installed extension code.
+
 ## 🧠 How it behaves
 
 - **Queries** stream in the answer to one `POST` (§6.1). Statements without rows answer with their
